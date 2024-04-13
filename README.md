@@ -5,8 +5,11 @@ These two endpoints are used by the (weather) webcam feature in GoGeo's upcoming
 
 ## Installation
 These instructions will get the server up and running. They will add the script as a service to `systemd` so that it runs on startup and is restarted on failure.
-Note that to use this will the GoGo weather server you will need to set up your Pi to serve https sites or the camera will not load on modern browsers.
+
+Note that to use this with the GoGo weather server you will need to set up your Pi to serve https sites or the camera will not load on modern browsers.
+
 Latest versions of Raspberry Pi OS include camera support.
+
 1. Physically install camera onto Pi.
 2. Download latest version of Raspberry Pi imager.
 3. Create SD card using imager by choosing appropriate Pi version, "Raspberry Pi     OS" version and flash drive (use Edit Settings to also set up login, ssh access, wifi etc.).
