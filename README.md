@@ -1,6 +1,7 @@
+
 ## Introduction
-Picamera Streamer is a modified version of one of the picamera2 sample file.: it provides an HTTP live stream (MJPEG) of the camera as well as an added snapshotting endpoint.
-These two endpoints are used by GoGeo's (weather) webcam feature.
+Picamera Streamer is a modified version of one of the [Raspbery Pi picamera2](https://github.com/raspberrypi/picamera2) sample files: it provides an HTTP live stream (MJPEG) of the camera as well as an added snapshotting endpoint.
+These two endpoints are used by the (weather) webcam feature in GoGeo's upcoming weather monitoring server.
 
 ## Installation
 Latest versions of Raspberry Pi OS include camera support.
