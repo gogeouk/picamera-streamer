@@ -1,4 +1,8 @@
-# Installing Picamera instructions
+## Introduction
+Picamera Streamer is a modified version of one of the picamera2 sample file.: it provides an HTTP live stream (MJPEG) of the camera as well as an added snapshotting endpoint.
+These two endpoints are used by GoGeo's (weather) webcam feature.
+
+## Installation
 Latest versions of Raspberry Pi OS include camera support.
 1. Physically install camera onto Pi.
 2. Download latest version of Raspberry Pi imager.
