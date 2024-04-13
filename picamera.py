@@ -4,6 +4,8 @@
 # Run this script, then point a web browser at http:<this-ip-address>:8000
 # Note: needs simplejpeg to be installed (pip3 install simplejpeg).
 
+# Licence for original code: https://github.com/raspberrypi/picamera2?tab=BSD-2-Clause-1-ov-file#readme
+
 import io
 import logging
 import socketserver
