@@ -5,7 +5,7 @@ After=multi-user.target
 [Service]
 User=lee
 WorkingDirectory=/home/pi/picamera
-ExecStart=/usr/bin/python /home/pi/picamera/picamera.py
+ExecStart=/usr/bin/python -u /home/pi/picamera/picamera.py
 Restart=on-failure
 
 [Install]

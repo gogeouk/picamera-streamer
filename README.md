@@ -25,3 +25,11 @@ Latest versions of Raspberry Pi OS include camera support.
 
         sudo systemctl enable picamera.service
         sudo systemctl start picamera.service
+        
+## Configuration
+ 
+Create a .env file to configure the service; a `sample.env` file contains the most used settings. Keys here include `NAME` to give your camera a name (this shows on the default output), `PORT` to set the server port, and `RESOLUTION` to override the default resolution (the setting **must* be given in the format of WIDTHxHEIGHT (eg. `1280x720`).
+
+## Self managing HTTPS certificates
+
+If you wish to quickly get an HTTPS version of the server up and are willing to self manage SSL certificates, you can use the configuration keys of `KEYFILE` and `CERTFILE` to point to the private key and full chain certificates of your SSL certificate. This is quick and dirty (you can use the Letsencrypt `certbot` to generate these keys) but means you’ll need to manually update on expiry, so is not really recommended.
