@@ -9,24 +9,30 @@
 import io
 import logging
 import socketserver
+import ssl
 from http import server
 from threading import Condition
+from tools.getenv import get_env_var
 
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
 
-PAGE = """\
+width, height = get_env_var("RESOLUTION", "960x540").split("x")
+
+PAGE = f"""\
 <html>
 <head>
-<title>picamera2 MJPEG streaming demo</title>
+<title>{get_env_var("NAME", "Picamera")}</title>
 </head>
 <body>
-<h1>Picamera2 MJPEG Streaming Demo</h1>
-<img src="stream.mjpg" width="640" height="480" />
+<h1>{get_env_var("NAME", "Picamera")} Live</h1>
+<img src="stream.mjpg" width="{width}" height="{height}" />
 </body>
 </html>
 """
+
+print("Loading picamera streamer")
 
 
 class StreamingOutput(io.BufferedIOBase):
@@ -107,13 +113,21 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 picam2 = Picamera2()
-picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
+picam2.configure(picam2.create_video_configuration(main={"size": (int(width), int(height))}))
 output = StreamingOutput()
 picam2.start_recording(JpegEncoder(), FileOutput(output))
 
 try:
-    address = ('', 8000)
+    port = int(get_env_var("PORT", 8000));
+    address = ('', port)
     server = StreamingServer(address, StreamingHandler)
+    if (get_env_var("KEYFILE", False)):
+        server.socket = ssl.wrap_socket(
+                server.socket,
+                keyfile=get_env_var("KEYFILE"),
+                certfile=get_env_var("CERTFILE"),
+                server_side=True)
+    print(f"Starting picamera streamer on port {port}")
     server.serve_forever()
 finally:
     picam2.stop_recording()
