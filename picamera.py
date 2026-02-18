@@ -60,22 +60,21 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         elif self.path == '/current.jpg':
-            self.send_response(200)
-            self.send_header('Age', 0)
-            self.send_header('Cache-Control', 'no-cache, private')
-            self.send_header('Pragma', 'no-cache')
-            self.send_header('Content-Type', 'image/jpeg')
-            self.end_headers()
             try:
                 data = io.BytesIO()
                 picam2.capture_file(data, format='jpeg')
                 if data.getvalue() == b"":
                     self.send_error(404, "Image Not Found")
                     return
-                    
+                image = data.getvalue()
                 self.send_response(200)
-                self.wfile.write(data.getvalue())
-                
+                self.send_header('Age', 0)
+                self.send_header('Cache-Control', 'no-cache, private')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', len(image))
+                self.end_headers()
+                self.wfile.write(image)
             except Exception as e:
                 logging.warning(
                     'Removed streaming client %s: %s',
@@ -90,8 +89,10 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             try:
                 while True:
                     with output.condition:
-                        output.condition.wait()
+                        output.condition.wait(timeout=5)
                         frame = output.frame
+                    if frame is None:
+                        break
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(frame))
@@ -122,11 +123,9 @@ try:
     address = ('', port)
     server = StreamingServer(address, StreamingHandler)
     if (get_env_var("KEYFILE", False)):
-        server.socket = ssl.wrap_socket(
-                server.socket,
-                keyfile=get_env_var("KEYFILE"),
-                certfile=get_env_var("CERTFILE"),
-                server_side=True)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=get_env_var("CERTFILE"), keyfile=get_env_var("KEYFILE"))
+        server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f"Starting picamera streamer on port {port}")
     server.serve_forever()
 finally:
