@@ -1,36 +1,102 @@
 
 ## Introduction
-Picamera Streamer is a modified version of one of the [Raspbery Pi picamera2](https://github.com/raspberrypi/picamera2) sample files: it provides an HTTP live stream (MJPEG) of the camera as well as an added snapshotting endpoint.
-These two endpoints are used by the (weather) webcam feature in GoGeo's upcoming weather monitoring server.
+Picamera Streamer is a modified version of one of the [Raspberry Pi picamera2](https://github.com/raspberrypi/picamera2) sample files: it provides an HTTP live stream (MJPEG) of the camera as well as a snapshot endpoint.
+These two endpoints are used by the webcam feature in GoGeo's weather monitoring server.
 
 ## Installation
-These instructions will get the server up and running. They will add the script as a service to `systemd` so that it runs on startup and is restarted on failure.
 
-Note that to use this with the GoGo weather server you will need to set up your Pi to serve https sites or the camera will not load on modern browsers.
+These instructions get the server running as a `systemd` service so it starts on boot and restarts automatically on failure.
 
-Latest versions of Raspberry Pi OS include camera support.
+Latest versions of Raspberry Pi OS include camera support out of the box.
 
-1. Physically install camera onto Pi.
-2. Download latest version of Raspberry Pi imager.
-3. Create SD card using imager by choosing appropriate Pi version, "Raspberry Pi     OS" version and flash drive (use Edit Settings to also set up login, ssh access, wifi etc.).
-4. Put into Pi and start up. If necessary (and didn't do it during imaging) set up login, ssh access, network and anything else necessary for your system.
-5. Login, make a directory in home folder (picamera) and copy in picamera.py file.
-6. If necessary, install the picamera2 library (`pip3 install picamera2`)
-7. **TEST** python3 picamera.py
-8. **TEST** go to `http://server-address:8000` on browser for live video.
-9. **TEST** hit `http://server-address:8000/current.jpg` for snapshot.
-10. Edit **picamera.service** with correct username and script paths
-11. Copy **picamera.service** to systemd directory (`sudo cp picamera.service /etc/systemd/system`)
-12. Save and reload systemd (`sudo systemctl daemon-reload`)
-13. Enable and restart the service:
+1. Physically install the camera onto the Pi.
+2. Download the latest Raspberry Pi Imager and flash an SD card with Raspberry Pi OS (use Edit Settings to configure login, SSH, wifi etc. during imaging).
+3. Boot the Pi, complete any remaining setup, and SSH in.
+4. Clone this repo into your home directory:
 
+        git clone https://github.com/gogeouk/picamera-streamer.git
+        cd picamera-streamer
+
+5. If necessary, install the picamera2 library:
+
+        pip3 install picamera2
+
+6. Create a `.env` file (see **Configuration** below).
+7. **TEST** run the script directly:
+
+        python3 picamera.py
+
+8. **TEST** open `http://<pi-address>:8000` in a browser for live video.
+9. **TEST** open `http://<pi-address>:8000/current.jpg` for a snapshot.
+10. Edit `picamera.service` — update `User`, `WorkingDirectory` and `ExecStart` to match your username and install path.
+11. Install and enable the service:
+
+        sudo cp picamera.service /etc/systemd/system/
+        sudo systemctl daemon-reload
         sudo systemctl enable picamera.service
         sudo systemctl start picamera.service
-        
+
 ## Configuration
- 
-Create a .env file to configure the service; a `sample.env` file contains the most used settings. Keys here include `NAME` to give your camera a name (this shows on the default output), `PORT` to set the server port, and `RESOLUTION` to override the default resolution (the setting **must* be given in the format of WIDTHxHEIGHT (eg. `1280x720`).
 
-## Self managing HTTPS certificates
+Create a `.env` file in the project directory to configure the service. A `sample.env` file is provided as a starting point.
 
-If you wish to quickly get an HTTPS version of the server up and are willing to self manage SSL certificates, you can use the configuration keys of `KEYFILE` and `CERTFILE` to point to the private key and full chain certificates of your SSL certificate. This is quick and dirty (you can use the Letsencrypt `certbot` to generate these keys) but means you’ll need to manually update on expiry, so is not really recommended.
+| Key | Description | Default |
+|---|---|---|
+| `NAME` | Camera name shown on the stream page | `Picamera` |
+| `PORT` | HTTP/HTTPS port to serve on | `8000` |
+| `RESOLUTION` | Capture resolution as `WIDTHxHEIGHT` | `960x540` |
+| `KEYFILE` | Path to TLS private key (enables HTTPS) | *(disabled)* |
+| `CERTFILE` | Path to TLS certificate chain (enables HTTPS) | *(disabled)* |
+
+## Automatic health check
+
+A systemd timer is included that checks the stream every 5 minutes and restarts the service if it has stopped responding. To install it:
+
+    sudo cp systemd-files/picamera-monitor.service /etc/systemd/system/
+    sudo cp systemd-files/picamera-monitor.timer /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable picamera-monitor.timer
+    sudo systemctl start picamera-monitor.timer
+
+## HTTPS with automatic certificate renewal
+
+Modern browsers require HTTPS to display camera streams. The recommended approach is to use [Let's Encrypt](https://letsencrypt.org/) via `certbot` with automatic renewal.
+
+### Initial setup
+
+1. Install certbot:
+
+        sudo apt-get install certbot
+
+2. Obtain a certificate. certbot uses port 80 for the HTTP challenge, so port 80 must be forwarded to your Pi on your router during this step:
+
+        sudo certbot certonly --standalone -d your-domain.example.com
+
+3. Create the `certificates/` directory and copy the certs in:
+
+        mkdir -p certificates
+        sudo cp /etc/letsencrypt/live/your-domain.example.com/fullchain.pem certificates/
+        sudo cp /etc/letsencrypt/live/your-domain.example.com/privkey.pem certificates/
+        sudo chown $USER:$USER certificates/*.pem
+        chmod 600 certificates/privkey.pem
+
+4. Add `KEYFILE` and `CERTFILE` to your `.env`:
+
+        KEYFILE=certificates/privkey.pem
+        CERTFILE=certificates/fullchain.pem
+
+5. Restart the service:
+
+        sudo systemctl restart picamera.service
+
+### Automatic renewal
+
+certbot renews certificates automatically via a system timer. To make it also copy the new certs into place and restart the streamer, install the included deploy hook:
+
+1. Edit `systemd-files/picamera-cert-deploy.sh` — update `DOMAIN`, `DEST_DIR`, and the `chown` username to match your setup.
+2. Install it:
+
+        sudo cp systemd-files/picamera-cert-deploy.sh /etc/letsencrypt/renewal-hooks/deploy/
+        sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh
+
+After this, every time certbot renews the certificate (typically every 60 days), the new certs will be deployed and the service restarted automatically — no manual intervention needed.
