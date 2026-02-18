@@ -1,5 +1,5 @@
 [Unit]
-Description=Health Check for Valleycam
+Description=Picamera Streamer Health Check
 
 [Service]
 Type=oneshot

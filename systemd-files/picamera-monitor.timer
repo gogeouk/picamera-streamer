@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic Health Check for Valleycam
+Description=Periodic Picamera Streamer Health Check
 
 [Timer]
 OnBootSec=1min
