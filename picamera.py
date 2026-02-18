@@ -7,20 +7,26 @@
 # Licence for original code: https://github.com/raspberrypi/picamera2?tab=BSD-2-Clause-1-ov-file#readme
 
 import io
+import json
 import logging
 import socketserver
 import ssl
+import subprocess
 import time
+from datetime import datetime, timezone
 from http import server
-from threading import Condition
+from threading import Condition, Lock
 from tools.getenv import get_env_var
 
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
-from libcamera import controls
-
 width, height = get_env_var("RESOLUTION", "960x540").split("x")
+hdr_enabled = get_env_var("HDR", "0").strip().lower() in ("1", "true", "yes")
+
+start_time = time.time()
+active_clients = 0
+active_clients_lock = Lock()
 
 PAGE = f"""\
 <html>
@@ -81,6 +87,21 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 logging.warning(
                     'Removed streaming client %s: %s',
                     self.client_address, str(e))
+        elif self.path == '/status':
+            status = {
+                "name": get_env_var("NAME", "Picamera"),
+                "uptime_seconds": int(time.time() - start_time),
+                "resolution": f"{width}x{height}",
+                "hdr": hdr_enabled,
+                "clients": active_clients,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            content = json.dumps(status).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
         elif self.path == '/stream.mjpg':
             self.send_response(200)
             self.send_header('Age', 0)
@@ -88,6 +109,8 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header('Pragma', 'no-cache')
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
             self.end_headers()
+            with active_clients_lock:
+                active_clients += 1
             try:
                 while True:
                     with output.condition:
@@ -105,6 +128,9 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 logging.warning(
                     'Removed streaming client %s: %s',
                     self.client_address, str(e))
+            finally:
+                with active_clients_lock:
+                    active_clients -= 1
         else:
             self.send_error(404)
             self.end_headers()
@@ -114,6 +140,13 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+
+if hdr_enabled:
+    subprocess.run(
+        ["v4l2-ctl", "--set-ctrl", "wide_dynamic_range=1", "-d", "/dev/v4l-subdev0"],
+        check=False
+    )
+    print("HDR enabled")
 
 picam2 = Picamera2()
 video_config = picam2.create_video_configuration({"size": (1280, 720)})
