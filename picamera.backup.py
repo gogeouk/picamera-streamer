@@ -10,7 +10,6 @@ import io
 import logging
 import socketserver
 import ssl
-import time
 from http import server
 from threading import Condition
 from tools.getenv import get_env_var
@@ -18,7 +17,7 @@ from tools.getenv import get_env_var
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
-from libcamera import controls, Rectangle
+from libcamera import controls
 
 width, height = get_env_var("RESOLUTION", "960x540").split("x")
 
@@ -62,21 +61,22 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         elif self.path == '/current.jpg':
+            self.send_response(200)
+            self.send_header('Age', 0)
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'image/jpeg')
+            self.end_headers()
             try:
                 data = io.BytesIO()
                 picam2.capture_file(data, format='jpeg')
                 if data.getvalue() == b"":
                     self.send_error(404, "Image Not Found")
                     return
-                image = data.getvalue()
+                    
                 self.send_response(200)
-                self.send_header('Age', 0)
-                self.send_header('Cache-Control', 'no-cache, private')
-                self.send_header('Pragma', 'no-cache')
-                self.send_header('Content-Type', 'image/jpeg')
-                self.send_header('Content-Length', len(image))
-                self.end_headers()
-                self.wfile.write(image)
+                self.wfile.write(data.getvalue())
+                
             except Exception as e:
                 logging.warning(
                     'Removed streaming client %s: %s',
@@ -91,10 +91,8 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             try:
                 while True:
                     with output.condition:
-                        output.condition.wait(timeout=5)
+                        output.condition.wait()
                         frame = output.frame
-                    if frame is None:
-                        break
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(frame))
@@ -119,13 +117,6 @@ picam2 = Picamera2()
 #picam2.configure(picam2.create_video_configuration(main={"size": (int(width), int(height))}))
 #picam2.set_controls({"AfMode":controls.AfModeEnum.Manual, "LensPosition": 0})
 #picam2.set_controls({"AfMode":controls.AfModeEnum.Manual,"LensPosition":0.0})
-
-video_config = picam2.create_video_configuration({"size": (1280, 720)})
-picam2.configure(video_config)
-
-picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})
-time.sleep(5)
-
 output = StreamingOutput()
 picam2.start_recording(JpegEncoder(), FileOutput(output))
 
@@ -134,9 +125,11 @@ try:
     address = ('', port)
     server = StreamingServer(address, StreamingHandler)
     if (get_env_var("KEYFILE", False)):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=get_env_var("CERTFILE"), keyfile=get_env_var("KEYFILE"))
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.socket = ssl.wrap_socket(
+                server.socket,
+                keyfile=get_env_var("KEYFILE"),
+                certfile=get_env_var("CERTFILE"),
+                server_side=True)
     print(f"Starting picamera streamer on port {port}")
     server.serve_forever()
 finally:

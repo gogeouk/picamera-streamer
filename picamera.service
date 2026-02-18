@@ -1,11 +1,11 @@
 [Unit]
-Description=Picamera
+Description=Valleycam
 After=multi-user.target
 
 [Service]
 User=lee
-WorkingDirectory=/home/pi/picamera
-ExecStart=/usr/bin/python -u /home/pi/picamera/picamera.py
+WorkingDirectory=/home/lee/picamera-streamer
+ExecStart=/usr/bin/python -u /home/lee/picamera-streamer/picamera.py
 Restart=on-failure
 
 [Install]

@@ -1,0 +1,6 @@
+[Unit]
+Description=Health Check for Valleycam
+
+[Service]
+Type=oneshot
+ExecStart=/home/lee/picamera-streamer/health_check.sh
