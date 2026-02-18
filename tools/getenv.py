@@ -25,7 +25,7 @@ def get_env_var(key, default=None):
       for line in f:
         if not line.strip() or line.startswith("#"):
           continue
-        key_env, value_env = line.strip().split("=")
+        key_env, value_env = line.strip().split("=", 1)
         if key_env == key:
           return value_env
   except FileNotFoundError:
