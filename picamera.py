@@ -56,6 +56,7 @@ class StreamingOutput(io.BufferedIOBase):
 
 class StreamingHandler(server.BaseHTTPRequestHandler):
     def do_GET(self):
+        global active_clients, active_clients_lock
         if self.path == '/':
             self.send_response(301)
             self.send_header('Location', '/index.html')
