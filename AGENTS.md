@@ -36,15 +36,24 @@ picamera.service               — systemd service file for the streamer itself
 | `RESOLUTION` | `WIDTHxHEIGHT` | `960x540` |
 | `KEYFILE` | TLS private key path (enables HTTPS) | disabled |
 | `CERTFILE` | TLS cert chain path (enables HTTPS) | disabled |
-| `HDR` | Wide dynamic range mode (`1`/`0`) | `0` |
 
 `.env` is gitignored. `sample.env` is the committed placeholder with no real values.
 
 ## HDR
 
-Setting `HDR=1` causes the server to run `v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0` before the camera is initialised on every service start. This is necessary because the setting resets on Pi reboot and must be applied while the camera is not open. Requires `v4l-utils` (`sudo apt install v4l-utils`).
+HDR is controlled via a systemd drop-in override, **not** `.env`. When `HDR=1` is set, the server runs `v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0` before the camera initialises. This is necessary because the setting resets on reboot and must be applied before the camera is opened. Requires `v4l-utils` (`sudo apt install v4l-utils`).
 
-To toggle HDR: change `HDR=` in `.env` and `sudo systemctl restart picamera.service`. The monitoring dashboard (`picamera-monitor`) can do this automatically.
+To enable HDR manually:
+
+```bash
+sudo mkdir -p /etc/systemd/system/picamera.service.d/
+printf '[Service]\nEnvironment=HDR=1\n' | sudo tee /etc/systemd/system/picamera.service.d/hdr.conf
+sudo systemctl daemon-reload && sudo systemctl restart picamera.service
+```
+
+To disable: `sudo rm /etc/systemd/system/picamera.service.d/hdr.conf && sudo systemctl daemon-reload && sudo systemctl restart picamera.service`
+
+The `picamera-monitor` dashboard HDR On/Off buttons do this automatically via SSH. Do **not** add `HDR=` to `.env` — that file is for static config only.
 
 ## Known issues resolved (important context)
 

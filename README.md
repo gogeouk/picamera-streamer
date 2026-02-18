@@ -47,7 +47,21 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 | `RESOLUTION` | Capture resolution as `WIDTHxHEIGHT` | `960x540` |
 | `KEYFILE` | Path to TLS private key (enables HTTPS) | *(disabled)* |
 | `CERTFILE` | Path to TLS certificate chain (enables HTTPS) | *(disabled)* |
-| `HDR` | Enable wide dynamic range mode (`1`/`0`). Requires `v4l-utils`. Applied before camera start on each service startup. | `0` |
+
+### HDR (wide dynamic range)
+
+HDR is controlled via a systemd drop-in override, not `.env`. To enable it manually:
+
+    sudo mkdir -p /etc/systemd/system/picamera.service.d/
+    printf '[Service]\nEnvironment=HDR=1\n' | sudo tee /etc/systemd/system/picamera.service.d/hdr.conf
+    sudo systemctl daemon-reload && sudo systemctl restart picamera.service
+
+To disable:
+
+    sudo rm /etc/systemd/system/picamera.service.d/hdr.conf
+    sudo systemctl daemon-reload && sudo systemctl restart picamera.service
+
+If you use `picamera-monitor`, the HDR On/Off buttons do this automatically. Requires `v4l-utils` (`sudo apt install v4l-utils`).
 
 ## Automatic health check
 
