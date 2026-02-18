@@ -18,7 +18,7 @@ from tools.getenv import get_env_var
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
-from libcamera import controls, Rectangle
+from libcamera import controls
 
 width, height = get_env_var("RESOLUTION", "960x540").split("x")
 
@@ -116,10 +116,6 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 picam2 = Picamera2()
-#picam2.configure(picam2.create_video_configuration(main={"size": (int(width), int(height))}))
-#picam2.set_controls({"AfMode":controls.AfModeEnum.Manual, "LensPosition": 0})
-#picam2.set_controls({"AfMode":controls.AfModeEnum.Manual,"LensPosition":0.0})
-
 video_config = picam2.create_video_configuration({"size": (1280, 720)})
 picam2.configure(video_config)
 
@@ -130,7 +126,7 @@ output = StreamingOutput()
 picam2.start_recording(JpegEncoder(), FileOutput(output))
 
 try:
-    port = int(get_env_var("PORT", 8000));
+    port = int(get_env_var("PORT", 8000))
     address = ('', port)
     server = StreamingServer(address, StreamingHandler)
     if (get_env_var("KEYFILE", False)):
