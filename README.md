@@ -47,6 +47,7 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 | `RESOLUTION` | Capture resolution as `WIDTHxHEIGHT` | `960x540` |
 | `KEYFILE` | Path to TLS private key (enables HTTPS) | *(disabled)* |
 | `CERTFILE` | Path to TLS certificate chain (enables HTTPS) | *(disabled)* |
+| `HDR` | Enable wide dynamic range mode (`1`/`0`). Requires `v4l-utils`. Applied before camera start on each service startup. | `0` |
 
 ## Automatic health check
 
