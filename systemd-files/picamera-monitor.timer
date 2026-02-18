@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Health Check for Valleycam
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=picamera-monitor.service
+
+[Install]
+WantedBy=timers.target
