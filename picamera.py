@@ -28,6 +28,16 @@ start_time = time.time()
 active_clients = 0
 active_clients_lock = Lock()
 
+# Concurrent MJPEG viewers allowed. Each one costs a thread; the public weather
+# site embeds the stream, so without a ceiling a burst of visitors can pin the Pi.
+MAX_STREAM_CLIENTS = int(get_env_var("MAX_STREAM_CLIENTS", 8))
+# Socket write timeout for a stream client. A viewer that disappears without
+# closing (mobile losing signal, NAT entry expiring, tab discarded) never sends
+# FIN or RST, so a blocking write would wait indefinitely and leak the thread.
+STREAM_CLIENT_TIMEOUT = int(get_env_var("STREAM_CLIENT_TIMEOUT", 20))
+# Give up on a client if the camera produces no new frame for this long.
+STREAM_STALL_TIMEOUT = int(get_env_var("STREAM_STALL_TIMEOUT", 15))
+
 PAGE = f"""\
 <html>
 <head>
@@ -104,21 +114,46 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         elif self.path == '/stream.mjpg':
-            self.send_response(200)
-            self.send_header('Age', 0)
-            self.send_header('Cache-Control', 'no-cache, private')
-            self.send_header('Pragma', 'no-cache')
-            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
-            self.end_headers()
             with active_clients_lock:
+                if active_clients >= MAX_STREAM_CLIENTS:
+                    logging.warning(
+                        'Refusing stream client %s: at limit of %d',
+                        self.client_address, MAX_STREAM_CLIENTS)
+                    self.send_error(503, 'Too many streaming clients')
+                    return
                 active_clients += 1
             try:
+                self.send_response(200)
+                self.send_header('Age', 0)
+                self.send_header('Cache-Control', 'no-cache, private')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+                self.end_headers()
+
+                # Without this the write below can block forever on a client that
+                # went away without closing the socket, and the handler thread is
+                # never reclaimed. That leak is what wedges the service: geotwo
+                # accumulated 566 threads over 22 days of uptime.
+                self.connection.settimeout(STREAM_CLIENT_TIMEOUT)
+
+                last_frame_at = time.monotonic()
                 while True:
                     with output.condition:
-                        output.condition.wait(timeout=5)
+                        got_frame = output.condition.wait(timeout=5)
                         frame = output.frame
                     if frame is None:
                         break
+                    if not got_frame:
+                        # Camera produced nothing new. Re-sending the same stale
+                        # frame indefinitely hides the stall from the viewer, so
+                        # drop the connection and let them reconnect.
+                        if time.monotonic() - last_frame_at > STREAM_STALL_TIMEOUT:
+                            logging.warning(
+                                'No new frame for %ss, dropping client %s',
+                                STREAM_STALL_TIMEOUT, self.client_address)
+                            break
+                        continue
+                    last_frame_at = time.monotonic()
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(frame))
