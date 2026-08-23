@@ -15,7 +15,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from http import server
-from threading import Condition, Lock
+from threading import Condition, Lock, Timer
 from tools.getenv import get_env_var
 
 from picamera2 import Picamera2
@@ -39,6 +39,74 @@ STREAM_CLIENT_TIMEOUT = int(get_env_var("STREAM_CLIENT_TIMEOUT", 20))
 STREAM_STALL_TIMEOUT = int(get_env_var("STREAM_STALL_TIMEOUT", 15))
 
 _cert_cache = {"checked_at": 0.0, "expires": None, "days_remaining": None}
+
+# How long the encoder keeps running after the last viewer leaves. Stops a page
+# refresh or a viewer flicking between cameras from thrashing the encoder.
+ENCODER_LINGER = int(get_env_var("ENCODER_LINGER", 20))
+# How long a connecting viewer waits for the first frame after a cold start.
+ENCODER_START_TIMEOUT = int(get_env_var("ENCODER_START_TIMEOUT", 10))
+
+encoder_lock = Lock()
+_encoder = None
+_encoder_stop_timer = None
+
+# Lock ordering, to avoid deadlock: encoder_lock is always taken BEFORE
+# active_clients_lock, never the other way round. Callers must not hold
+# active_clients_lock when calling acquire_encoder()/release_encoder().
+
+
+def acquire_encoder():
+    """Start the JPEG encoder if it is not already running.
+
+    The camera itself runs continuously (snapshots need it), but the encoder
+    only needs to run while someone is actually watching the live stream.
+    Encoding continuously regardless of demand kept both Pis at ~215% CPU
+    permanently, which on a thermally throttled Pi 3B is most of the reason
+    they became unstable.
+    """
+    global _encoder, _encoder_stop_timer
+    with encoder_lock:
+        if _encoder_stop_timer is not None:
+            _encoder_stop_timer.cancel()
+            _encoder_stop_timer = None
+        if _encoder is None:
+            output.frame = None  # don't serve a stale frame from the last session
+            _encoder = JpegEncoder()
+            picam2.start_encoder(_encoder, FileOutput(output))
+            logging.info("Encoder started (viewer connected)")
+
+
+def release_encoder():
+    """Schedule the encoder to stop once the last viewer has gone."""
+    global _encoder_stop_timer
+    with encoder_lock:
+        if _encoder_stop_timer is not None:
+            _encoder_stop_timer.cancel()
+        _encoder_stop_timer = Timer(ENCODER_LINGER, _stop_encoder_if_idle)
+        _encoder_stop_timer.daemon = True
+        _encoder_stop_timer.start()
+
+
+def _stop_encoder_if_idle():
+    global _encoder, _encoder_stop_timer
+    with encoder_lock:
+        _encoder_stop_timer = None
+        with active_clients_lock:
+            if active_clients > 0:
+                return
+        if _encoder is not None:
+            try:
+                picam2.stop_encoder()
+                logging.info("Encoder stopped (no viewers)")
+            except Exception as e:
+                logging.warning("Could not stop encoder: %s", e)
+            _encoder = None
+            output.frame = None
+
+
+def encoder_running():
+    with encoder_lock:
+        return _encoder is not None
 
 
 def cert_status():
@@ -145,6 +213,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 "hdr": hdr_enabled,
                 "clients": active_clients,
                 "max_clients": MAX_STREAM_CLIENTS,
+                "encoder_running": encoder_running(),
                 "cert_expires": cert_expires,
                 "cert_days_remaining": cert_days,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -165,6 +234,8 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                     return
                 active_clients += 1
             try:
+                # Not holding active_clients_lock here — see lock ordering note.
+                acquire_encoder()
                 self.send_response(200)
                 self.send_header('Age', 0)
                 self.send_header('Cache-Control', 'no-cache, private')
@@ -177,6 +248,18 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 # never reclaimed. That leak is what wedges the service: geotwo
                 # accumulated 566 threads over 22 days of uptime.
                 self.connection.settimeout(STREAM_CLIENT_TIMEOUT)
+
+                # Cold start: the encoder was idle, so wait for its first frame
+                # rather than treating the empty buffer as end-of-stream.
+                deadline = time.monotonic() + ENCODER_START_TIMEOUT
+                with output.condition:
+                    while output.frame is None and time.monotonic() < deadline:
+                        output.condition.wait(timeout=1)
+                    first_frame = output.frame
+                if first_frame is None:
+                    logging.warning('Encoder produced no frame within %ss for %s',
+                                    ENCODER_START_TIMEOUT, self.client_address)
+                    return
 
                 last_frame_at = time.monotonic()
                 while True:
@@ -209,6 +292,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             finally:
                 with active_clients_lock:
                     active_clients -= 1
+                release_encoder()
         else:
             self.send_error(404)
             self.end_headers()
@@ -234,7 +318,9 @@ picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})
 time.sleep(5)
 
 output = StreamingOutput()
-picam2.start_recording(JpegEncoder(), FileOutput(output))
+# Camera on, encoder off. /current.jpg uses capture_file() which only needs the
+# camera running; the encoder is started on demand by the first stream viewer.
+picam2.start()
 
 try:
     port = int(get_env_var("PORT", 8000))
@@ -247,4 +333,4 @@ try:
     print(f"Starting picamera streamer on port {port}")
     server.serve_forever()
 finally:
-    picam2.stop_recording()
+    picam2.stop()
