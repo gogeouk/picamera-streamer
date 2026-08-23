@@ -1,0 +1,15 @@
+# Copy to /etc/default/picamera-cert-deploy on the Pi that owns certbot.
+# No real values here — this file is committed.
+
+DOMAIN=your-domain.duckdns.org
+LOCAL_USER=pi
+SERVICE=picamera.service
+
+# The other Pi. Leave PEER_HOST empty on a single-Pi install.
+# Both Pis sit behind one NAT, so this is the external hostname with the peer's
+# forwarded SSH port; a LAN address or mDNS name works too and avoids relying on
+# the router supporting hairpin NAT.
+PEER_HOST=your-domain.example.com
+PEER_PORT=2222
+PEER_USER=pi
+PEER_SERVICE=picamera.service
