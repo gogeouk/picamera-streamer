@@ -38,6 +38,44 @@ STREAM_CLIENT_TIMEOUT = int(get_env_var("STREAM_CLIENT_TIMEOUT", 20))
 # Give up on a client if the camera produces no new frame for this long.
 STREAM_STALL_TIMEOUT = int(get_env_var("STREAM_STALL_TIMEOUT", 15))
 
+_cert_cache = {"checked_at": 0.0, "expires": None, "days_remaining": None}
+
+
+def cert_status():
+    """Expiry of the TLS certificate we are serving, refreshed hourly.
+
+    Surfaced in /status so the monitoring dashboard can warn before a cert
+    expires rather than after. An expired cert takes the camera off the weather
+    site silently: browsers refuse the stream but the service itself looks
+    perfectly healthy from the Pi's point of view.
+    """
+    certfile = get_env_var("CERTFILE", "")
+    if not certfile:
+        return None, None
+
+    now = time.time()
+    if now - _cert_cache["checked_at"] < 3600 and _cert_cache["expires"] is not None:
+        return _cert_cache["expires"], _cert_cache["days_remaining"]
+
+    try:
+        result = subprocess.run(
+            ["openssl", "x509", "-enddate", "-noout", "-in", certfile],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None, None
+        # Format: notAfter=Nov 14 08:56:10 2026 GMT
+        raw = result.stdout.strip().split("=", 1)[1].replace(" GMT", "")
+        expiry = datetime.strptime(raw, "%b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc)
+        days = (expiry - datetime.now(timezone.utc)).days
+        _cert_cache.update(
+            checked_at=now, expires=expiry.isoformat(), days_remaining=days
+        )
+        return _cert_cache["expires"], days
+    except Exception as e:
+        logging.warning("Could not read certificate expiry: %s", e)
+        return None, None
+
 PAGE = f"""\
 <html>
 <head>
@@ -99,12 +137,16 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                     'Removed streaming client %s: %s',
                     self.client_address, str(e))
         elif self.path == '/status':
+            cert_expires, cert_days = cert_status()
             status = {
                 "name": get_env_var("NAME", "Picamera"),
                 "uptime_seconds": int(time.time() - start_time),
                 "resolution": f"{width}x{height}",
                 "hdr": hdr_enabled,
                 "clients": active_clients,
+                "max_clients": MAX_STREAM_CLIENTS,
+                "cert_expires": cert_expires,
+                "cert_days_remaining": cert_days,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             content = json.dumps(status).encode('utf-8')
