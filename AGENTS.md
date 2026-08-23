@@ -72,6 +72,62 @@ Original code sent `send_response(200)` twice and sent headers before capturing 
 ### Health check checked wrong endpoint (fixed)
 `health_check.sh` was checking `http://localhost:8000/` (a redirect). This never triggered a restart for stream hangs. Fixed to check `/current.jpg` with `--max-time 10`.
 
+### Health check never ran — leading blank line before the shebang (fixed 2026-08-23)
+
+`health_check.sh` had an empty first line, so `#!/bin/bash` started at byte 1 instead of
+byte 0. The kernel requires the shebang at byte 0, so every invocation failed with
+`Exec format error` (systemd `status=203/EXEC`). The timer had been firing every five
+minutes on both Pis for months and **had never once executed the script** — no
+`picamera_health.log` existed on either machine.
+
+This is why Valleycam sat dead for three hours on 2026-08-23 despite the auto-restart
+timer being installed, enabled and active. Diagnose with
+`systemctl status picamera-monitor.service`, not by reading the timer state.
+
+### Health check probed the wrong protocol (fixed 2026-08-23)
+
+The script probed `http://localhost:8000/current.jpg`, but both Pis serve **HTTPS**
+(`KEYFILE`/`CERTFILE` are set in `.env`). Even with the shebang fixed it would have
+failed every run and restarted the service every five minutes. It now reads `PORT` and
+`KEYFILE` from `.env` and probes the scheme actually in use, with `-k` because the
+certificate is issued for the public hostname rather than `localhost`.
+
+Output now goes to the journal (`journalctl -u picamera-monitor.service`) rather than a
+file that grows without bound.
+
+### MJPEG handler threads leaked until the process wedged (fixed 2026-08-23)
+
+The stream loop had no socket timeout. A viewer that disappeared without closing the
+connection — mobile losing signal, NAT entry expiring, browser tab discarded — never sent
+FIN or RST, so `self.wfile.write()` blocked indefinitely and the handler thread was never
+reclaimed. The public weather site embeds the stream, so every visitor is a potential leak.
+
+Measured on geotwo at 22 days uptime: **566 threads**, against 14 on a freshly restarted
+geoone. Each leaked thread wakes on `condition.wait(timeout=5)`, so idle overhead grows
+without bound until the process can no longer service requests — including `/status`, which
+touches no camera hardware at all. A `/status` timeout is therefore the signature of this
+leak rather than of a camera fault.
+
+Fixed with three limits, all overridable in `.env`:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `MAX_STREAM_CLIENTS` | 8 | Refuse further viewers with 503 rather than spawning unbounded threads |
+| `STREAM_CLIENT_TIMEOUT` | 20 | Socket write timeout, so a dead peer raises instead of blocking |
+| `STREAM_STALL_TIMEOUT` | 15 | Drop a client if the camera produces no new frame, instead of re-sending a stale one forever |
+
+### Known, not yet fixed
+
+- **The encoder runs continuously even with zero viewers.** Both Pis sit at ~215% CPU
+  permanently. `start_recording()` encodes regardless of demand; only the encoder needs to
+  stop when idle, as `/current.jpg` uses `capture_file()` and needs the camera itself running.
+- **`RESOLUTION` does not configure the camera.** `create_video_configuration` hardcodes
+  `1280x720`; the env var only sets the `<img>` dimensions on the viewer page. Lowering the
+  real capture resolution is the cheapest thermal win available.
+- **geoone runs hot.** 77.4 °C versus 54.8 °C on geotwo, identical hardware (Pi 3B) and
+  identical load. `get_throttled` reports `0x70005` on both — under-voltage and throttling
+  active now, plus historical frequency capping. Enclosure and power supply, not software.
+
 ## Certificate setup (HTTPS)
 
 Both Pis use Let's Encrypt via certbot `--standalone`. The domain `geoclimatica.duckdns.org` resolves to a single external IP; Pi 1 and Pi 2 are port-forwarded on different ports (8022/8033 for SSH, 8000 for the streamer). Certbot runs on Pi 1 only.
