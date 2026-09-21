@@ -86,6 +86,25 @@ This is why Valleycam sat dead for three hours on 2026-08-23 despite the auto-re
 timer being installed, enabled and active. Diagnose with
 `systemctl status picamera-monitor.service`, not by reading the timer state.
 
+### The streamer runs as its own user (2026-09-22)
+
+`picamera.service` answers the internet on :8000. It used to run as `lee`, who has
+passwordless sudo, so any exploitable bug in it was root on the Pi. It now runs as
+the system user `picamera`: `video` group for the camera, read access to its own
+code, `.env` and TLS key (`privkey.pem` is `640 lee:picamera`), `NoNewPrivileges`,
+and nothing else. `lee`'s home is `711`, with everything except `picamera-streamer`
+closed to other users. `lee`'s account password is locked; logins are key-only.
+
+Set up by `sudo systemd-files/setup-service-user.sh` (idempotent), which installs
+the drop-in `systemd-files/picamera-user.conf`, then `systemctl restart picamera`.
+Undo: remove `/etc/systemd/system/picamera.service.d/user.conf`, `daemon-reload`,
+restart.
+
+**After any `git pull` that touches the certificate hook, reinstall it** (the setup
+script does this): certbot runs the copy in `/etc/letsencrypt/renewal-hooks/deploy/`,
+not the one in this repo. An old copy resets the key to `600 lee:lee`, and the
+streamer then cannot start.
+
 ### Who can log in where (2026-09-21)
 
 Both Pis serve one DuckDNS name, so only geoone renews the certificate (certbot

@@ -25,6 +25,16 @@ chgrp picamera "$KEY"
 chmod 640 "$KEY"
 
 install -D -m 644 "$APP/systemd-files/picamera-user.conf" /etc/systemd/system/picamera.service.d/user.conf
+
+# On the Pi that renews the certificate, the INSTALLED hook must be the version that
+# keeps the key readable by picamera. A git pull alone does not update it: on
+# 2026-09-22 the old installed copy ran, reset the key to 600 lee:lee, and Valleycam
+# could not start until the key was fixed by hand.
+HOOK=/etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh
+if [ -d "$(dirname "$HOOK")" ]; then
+  install -m 755 "$APP/systemd-files/picamera-cert-deploy.sh" "$HOOK"
+  echo "installed the current certificate hook at $HOOK"
+fi
 systemctl daemon-reload
 
 fail=0
