@@ -24,6 +24,7 @@ systemd-files/
   picamera-cert-deploy.sh      — generic template for certbot deploy hook (edit before use)
 health_check.sh                — curl /current.jpg with timeout; retries once after 20 s, restarts only if both fail
 monitor-gate.sh                — the ONLY command the dashboard's SSH key may run (forced command in authorized_keys)
+cert-receive.sh                — the ONLY command the certificate-sync key may run on the peer Pi
 sample.env                     — template for .env (committed; no real values)
 picamera.service               — systemd service file for the streamer itself
 ```
@@ -84,6 +85,26 @@ minutes on both Pis for months and **had never once executed the script** — no
 This is why Valleycam sat dead for three hours on 2026-08-23 despite the auto-restart
 timer being installed, enabled and active. Diagnose with
 `systemctl status picamera-monitor.service`, not by reading the timer state.
+
+### Who can log in where (2026-09-21)
+
+Both Pis serve one DuckDNS name, so only geoone renews the certificate (certbot
+`standalone`: the router forwards port 80 to geoone for the challenge). Its deploy
+hook then pushes the certificate to geotwo. That push used to go through lee's
+ordinary key on geoone, which geotwo trusted without limit: owning one Pi meant owning
+both. Now:
+
+| Key | Accepted by | Can do |
+|---|---|---|
+| Lee's own (`code@corbin.uk`) | both Pis | anything |
+| `picamera-monitor@ontoast` | both Pis | `monitor-gate.sh` verbs only |
+| `cert-sync@geoone` (root-owned, `/etc/picamera-cert-deploy/`) | geotwo | `cert-receive.sh`: install a certificate that is valid, matches its key, covers the same names and is not older |
+
+geoone's own `lee@geoone` key is no longer accepted anywhere. The hook pins geotwo's
+host keys (`/etc/picamera-cert-deploy/known_hosts`). Test between renewals with
+`sudo /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh --check`, which
+changes nothing; `certbot renew --dry-run` tests the renewal itself. Both passed on
+2026-09-21.
 
 ### The dashboard's SSH key is fenced in by monitor-gate.sh (2026-09-21)
 
