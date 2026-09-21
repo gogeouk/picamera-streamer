@@ -53,6 +53,24 @@ warn() { log "WARNING: $*"; status=1; }
 [ -n "$DOMAIN" ] || { log "ERROR: DOMAIN not set (see $CONF)"; exit 1; }
 [ -d "$CERT_DIR" ] || { log "ERROR: cert dir not found: $CERT_DIR"; exit 1; }
 
+PEER_KEY="${PEER_KEY:-/etc/picamera-cert-deploy/peer_ed25519}"
+PEER_KNOWN_HOSTS="${PEER_KNOWN_HOSTS:-/etc/picamera-cert-deploy/known_hosts}"
+
+peer() {  # peer <check|install>
+  tar -C "$DEST_DIR" -cf - fullchain.pem privkey.pem |
+    ssh -i "$PEER_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
+        -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PEER_KNOWN_HOSTS" \
+        -p "$PEER_PORT" "$PEER_USER@$PEER_HOST" "$1"
+}
+
+# `picamera-cert-deploy.sh --check` validates the peer round trip with the
+# certificate already installed here, and changes nothing on either Pi.
+if [ "${1:-}" = "--check" ]; then
+  [ -n "$PEER_HOST" ] || { log "no PEER_HOST configured"; exit 1; }
+  peer check && log "peer check passed" || warn "peer check FAILED"
+  exit $status
+fi
+
 # ── Local install ───────────────────────────────────────────────────────────
 install -o "$LOCAL_USER" -g "$LOCAL_USER" -m 644 \
   "$CERT_DIR/fullchain.pem" "$DEST_DIR/fullchain.pem" || { log "ERROR: local fullchain install failed"; exit 1; }
@@ -73,25 +91,8 @@ systemctl restart "$SERVICE" && log "restarted $SERVICE" || warn "could not rest
 #
 # Failures are reported loudly rather than aborting: the local Pi is already
 # healthy, and a silent failure is what caused the original problem.
-PEER_KEY="${PEER_KEY:-/etc/picamera-cert-deploy/peer_ed25519}"
-PEER_KNOWN_HOSTS="${PEER_KNOWN_HOSTS:-/etc/picamera-cert-deploy/known_hosts}"
-
 if [ -z "$PEER_HOST" ]; then
   log "no PEER_HOST configured — skipping peer sync"
-  exit $status
-fi
-
-peer() {  # peer <check|install>
-  tar -C "$DEST_DIR" -cf - fullchain.pem privkey.pem |
-    ssh -i "$PEER_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
-        -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PEER_KNOWN_HOSTS" \
-        -p "$PEER_PORT" "$PEER_USER@$PEER_HOST" "$1"
-}
-
-# `picamera-cert-deploy.sh --check` validates the round trip without installing
-# or restarting anything, for testing between renewals.
-if [ "${1:-}" = "--check" ]; then
-  peer check && log "peer check passed" || { warn "peer check FAILED"; }
   exit $status
 fi
 
