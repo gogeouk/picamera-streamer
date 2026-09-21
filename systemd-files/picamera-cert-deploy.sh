@@ -4,13 +4,11 @@
 #
 # Runs as root, because certbot does.
 #
-# IMPORTANT: root has no SSH key on these Pis — the key lives in the streamer
-# user's home directory. The previous version of this hook ran scp directly as
-# root, so it had no credentials, failed every single renewal, and (because of
-# `set -e`) aborted before reporting anything. The local Pi got its new cert and
-# the peer silently stayed on a stale one until someone noticed it had expired.
-# The peer transfer therefore drops to $LOCAL_USER via sudo -u and reuses that
-# user's existing key.
+# History: the first version ran scp as root, which had no SSH key, so every
+# renewal failed to reach the peer silently. The second (Aug 2026) borrowed the
+# streamer user's key via sudo -u, which worked but meant the peer trusted that
+# key with everything. Since Sep 2026 the hook has its own key, which the peer
+# accepts only as the forced command cert-receive.sh.
 #
 # Install on the Pi that owns certbot:
 #   sudo cp systemd-files/picamera-cert-deploy.sh \
@@ -19,8 +17,17 @@
 #   sudo cp systemd-files/picamera-cert-deploy.conf.example \
 #           /etc/default/picamera-cert-deploy   # then edit it
 #
+# Peer setup (once): a dedicated key and the peer's pinned host keys —
+#   sudo mkdir -p /etc/picamera-cert-deploy && sudo chmod 700 /etc/picamera-cert-deploy
+#   sudo ssh-keygen -t ed25519 -N '' -C cert-sync@<this-pi> -f /etc/picamera-cert-deploy/peer_ed25519
+#   # on the peer, in ~/.ssh/authorized_keys:
+#   #   restrict,command="/home/<user>/picamera-streamer/cert-receive.sh" <that .pub>
+#   # and here, the peer's host keys as "[host]:port <type> <key>" lines in
+#   #   /etc/picamera-cert-deploy/known_hosts
+#
 # Test without waiting for a renewal:
-#   sudo /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh
+#   sudo /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh --check   # validate only
+#   sudo /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh           # the real thing
 
 set -uo pipefail
 
@@ -58,23 +65,37 @@ log "installed locally (expires $expiry)"
 systemctl restart "$SERVICE" && log "restarted $SERVICE" || warn "could not restart $SERVICE"
 
 # ── Peer sync ───────────────────────────────────────────────────────────────
-# Runs as $LOCAL_USER so it picks up that user's SSH key. Failures here are
-# reported loudly rather than aborting: the local Pi is already healthy, and a
-# silent failure is what caused this whole problem.
+# Uses a dedicated key that the peer accepts ONLY as a forced command
+# (cert-receive.sh), and a pinned known_hosts file, so the peer's identity is
+# checked and this key can do nothing but hand over a valid certificate. Runs as
+# root with that key directly; the earlier version borrowed $LOCAL_USER's ordinary
+# key, which the peer trusted with everything.
+#
+# Failures are reported loudly rather than aborting: the local Pi is already
+# healthy, and a silent failure is what caused the original problem.
+PEER_KEY="${PEER_KEY:-/etc/picamera-cert-deploy/peer_ed25519}"
+PEER_KNOWN_HOSTS="${PEER_KNOWN_HOSTS:-/etc/picamera-cert-deploy/known_hosts}"
+
 if [ -z "$PEER_HOST" ]; then
   log "no PEER_HOST configured — skipping peer sync"
   exit $status
 fi
 
-SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
-
-sync_peer() {
-  sudo -u "$LOCAL_USER" scp $SSH_OPTS -P "$PEER_PORT" \
-      "$DEST_DIR/fullchain.pem" "$DEST_DIR/privkey.pem" \
-      "$PEER_USER@$PEER_HOST:$PEER_DEST/" || return 1
-  sudo -u "$LOCAL_USER" ssh $SSH_OPTS -p "$PEER_PORT" "$PEER_USER@$PEER_HOST" \
-      "chmod 644 $PEER_DEST/fullchain.pem && chmod 600 $PEER_DEST/privkey.pem && sudo systemctl restart $PEER_SERVICE" || return 1
+peer() {  # peer <check|install>
+  tar -C "$DEST_DIR" -cf - fullchain.pem privkey.pem |
+    ssh -i "$PEER_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
+        -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PEER_KNOWN_HOSTS" \
+        -p "$PEER_PORT" "$PEER_USER@$PEER_HOST" "$1"
 }
+
+# `picamera-cert-deploy.sh --check` validates the round trip without installing
+# or restarting anything, for testing between renewals.
+if [ "${1:-}" = "--check" ]; then
+  peer check && log "peer check passed" || { warn "peer check FAILED"; }
+  exit $status
+fi
+
+sync_peer() { peer install; }
 
 if sync_peer; then
   log "synced to $PEER_USER@$PEER_HOST:$PEER_PORT and restarted $PEER_SERVICE"
