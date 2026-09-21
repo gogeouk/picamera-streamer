@@ -59,7 +59,14 @@ if [ "$verb" = check ]; then
 fi
 
 # Same directory, then rename: the streamer never sees a half-written file.
-install -m 644 "$new" "$DEST/.fullchain.pem.new" && install -m 600 "$key" "$DEST/.privkey.pem.new" \
+# The key must stay readable by the streamer's own user if it has one
+# (setup-service-user.sh), or HTTPS breaks at the first renewal.
+if getent group picamera >/dev/null; then
+  keyinstall() { sudo install -o "$(id -un)" -g picamera -m 640 "$1" "$2"; }
+else
+  keyinstall() { install -m 600 "$1" "$2"; }
+fi
+install -m 644 "$new" "$DEST/.fullchain.pem.new" && keyinstall "$key" "$DEST/.privkey.pem.new" \
   && mv -f "$DEST/.fullchain.pem.new" "$DEST/fullchain.pem" && mv -f "$DEST/.privkey.pem.new" "$DEST/privkey.pem" \
   || fail "could not write to $DEST"
 logger -t cert-receive "installed certificate expiring $expiry"

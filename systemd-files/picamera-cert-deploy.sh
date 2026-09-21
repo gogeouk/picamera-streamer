@@ -74,7 +74,10 @@ fi
 # ── Local install ───────────────────────────────────────────────────────────
 install -o "$LOCAL_USER" -g "$LOCAL_USER" -m 644 \
   "$CERT_DIR/fullchain.pem" "$DEST_DIR/fullchain.pem" || { log "ERROR: local fullchain install failed"; exit 1; }
-install -o "$LOCAL_USER" -g "$LOCAL_USER" -m 600 \
+# If the streamer runs as its own user (setup-service-user.sh), that user's group must
+# be able to read the key, or HTTPS silently breaks at the first renewal.
+if getent group picamera >/dev/null; then KEY_GROUP=picamera KEY_MODE=640; else KEY_GROUP="$LOCAL_USER" KEY_MODE=600; fi
+install -o "$LOCAL_USER" -g "$KEY_GROUP" -m "$KEY_MODE" \
   "$CERT_DIR/privkey.pem"   "$DEST_DIR/privkey.pem"   || { log "ERROR: local privkey install failed"; exit 1; }
 
 expiry=$(openssl x509 -enddate -noout -in "$DEST_DIR/fullchain.pem" 2>/dev/null | cut -d= -f2)
