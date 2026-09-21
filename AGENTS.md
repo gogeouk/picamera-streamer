@@ -23,6 +23,7 @@ systemd-files/
   picamera-monitor.timer       — fires 1 min after boot, then every 5 min
   picamera-cert-deploy.sh      — generic template for certbot deploy hook (edit before use)
 health_check.sh                — curl /current.jpg with timeout; retries once after 20 s, restarts only if both fail
+monitor-gate.sh                — the ONLY command the dashboard's SSH key may run (forced command in authorized_keys)
 sample.env                     — template for .env (committed; no real values)
 picamera.service               — systemd service file for the streamer itself
 ```
@@ -83,6 +84,19 @@ minutes on both Pis for months and **had never once executed the script** — no
 This is why Valleycam sat dead for three hours on 2026-08-23 despite the auto-restart
 timer being installed, enabled and active. Diagnose with
 `systemctl status picamera-monitor.service`, not by reading the timer state.
+
+### The dashboard's SSH key is fenced in by monitor-gate.sh (2026-09-21)
+
+`cams.gogeo.uk` (picamera-monitor) controls this Pi over SSH. Until 2026-09-21 it did
+so with lee's personal key, which has passwordless root here, mounted into a
+web-facing container. It now has its own key, installed in `~/.ssh/authorized_keys`
+as:
+
+    restrict,command="/home/lee/picamera-streamer/monitor-gate.sh" ssh-ed25519 AAAA... picamera-monitor@ontoast
+
+so it can only `probe`, `start`, `stop`, `restart`, `hdr-on` or `hdr-off`. Anything
+else is refused and logged (`journalctl -t monitor-gate`). If the dashboard needs a new
+ability, add a verb to the gate; never loosen the key.
 
 ### Health check restarted healthy cameras under load (fixed 2026-09-21)
 
