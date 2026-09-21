@@ -32,10 +32,23 @@ fi
 
 URL="$SCHEME://localhost:$PORT/current.jpg"
 
-if curl "${CURL_OPTS[@]}" "$URL" -o /dev/null; then
+probe() { curl "${CURL_OPTS[@]}" "$URL" -o /dev/null; }
+
+if probe; then
   echo "$(date -Is): ok ($URL)"
   exit 0
 fi
 
-echo "$(date -Is): health check FAILED ($URL) — restarting $SERVICE"
+# One slow answer is not a dead camera. On a Pi 3, a burst of CPU or disk work
+# can push a healthy response past the timeout, and restarting then causes the
+# very outage this check exists to prevent. Seen on geoone, 21 Sep 2026: an apt
+# run made a single probe time out and the camera was restarted for nothing. A
+# genuinely stalled streamer fails the second probe too.
+sleep "${RETRY_AFTER:-20}"
+if probe; then
+  echo "$(date -Is): slow once, then ok ($URL) — not restarting"
+  exit 0
+fi
+
+echo "$(date -Is): health check FAILED twice ($URL) — restarting $SERVICE"
 systemctl restart "$SERVICE"

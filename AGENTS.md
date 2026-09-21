@@ -22,7 +22,7 @@ systemd-files/
   picamera-monitor.service     — systemd one-shot for health check
   picamera-monitor.timer       — fires 1 min after boot, then every 5 min
   picamera-cert-deploy.sh      — generic template for certbot deploy hook (edit before use)
-health_check.sh                — curl /current.jpg with timeout; restarts service on failure
+health_check.sh                — curl /current.jpg with timeout; retries once after 20 s, restarts only if both fail
 sample.env                     — template for .env (committed; no real values)
 picamera.service               — systemd service file for the streamer itself
 ```
@@ -83,6 +83,18 @@ minutes on both Pis for months and **had never once executed the script** — no
 This is why Valleycam sat dead for three hours on 2026-08-23 despite the auto-restart
 timer being installed, enabled and active. Diagnose with
 `systemctl status picamera-monitor.service`, not by reading the timer state.
+
+### Health check restarted healthy cameras under load (fixed 2026-09-21)
+
+A single probe that took longer than 10 seconds restarted the service. On a Pi 3 that
+happens to a perfectly healthy camera whenever the machine is busy: an `apt` run on
+geoone on 2026-09-21 did exactly that, and the restart itself caused the outage. geoone
+was also being restarted about one and a half times a day at the time, while Raspberry Pi
+Connect's screen-sharing process crash-looped every few seconds on it (since removed),
+so some of those were probably the same false alarm. The check now waits 20 seconds and
+probes again, and restarts only if both probes fail. The journal says
+`slow once, then ok` when the retry saved a restart; count those before assuming a
+camera problem.
 
 ### Health check probed the wrong protocol (fixed 2026-08-23)
 
