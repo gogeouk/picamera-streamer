@@ -9,6 +9,7 @@
 import io
 import json
 import logging
+import os
 import socketserver
 import ssl
 import subprocess
@@ -45,6 +46,22 @@ _cert_cache = {"checked_at": 0.0, "expires": None, "days_remaining": None}
 ENCODER_LINGER = int(get_env_var("ENCODER_LINGER", 20))
 # How long a connecting viewer waits for the first frame after a cold start.
 ENCODER_START_TIMEOUT = int(get_env_var("ENCODER_START_TIMEOUT", 10))
+# Frames a second sent to each viewer. The camera and the minute-by-minute
+# snapshots are unaffected: this only decides how often an encoded frame is kept
+# and sent. At the camera's own rate a single viewer pulled 15-17 Mbit/s from a
+# domestic upload, which is most of why the live view stalled; 5 fps is about
+# 3.5 Mbit/s and still shows a bird crossing the frame.
+STREAM_FPS = float(get_env_var("STREAM_FPS", 5))
+# What the camera itself produces, used only to tell the encoder how many frames
+# it can skip (which saves the CPU of encoding them). If it is wrong, the rate
+# above is still enforced when frames are sent.
+CAMERA_FPS = float(get_env_var("CAMERA_FPS", 25))
+# Where the viewing counts are kept, so a restart does not lose the day's totals.
+# The service cannot write to its own folder (ProtectHome=read-only) and its /tmp is
+# wiped on restart (PrivateTmp), so this goes in the state directory systemd makes
+# for it: StateDirectory=picamera, which is /var/lib/picamera, owned by the service
+# user. Falls back to the working directory when run by hand.
+STATS_FILE = get_env_var("STATS_FILE", os.path.join(os.environ.get("STATE_DIRECTORY", "."), "stream-stats.json"))
 
 encoder_lock = Lock()
 _encoder = None
@@ -72,6 +89,9 @@ def acquire_encoder():
         if _encoder is None:
             output.frame = None  # don't serve a stale frame from the last session
             _encoder = JpegEncoder()
+            # Do not even encode the frames the rate gate would throw away.
+            if STREAM_FPS > 0 and CAMERA_FPS > STREAM_FPS:
+                _encoder.frame_skip_count = max(0, int(round(CAMERA_FPS / STREAM_FPS)) - 1)
             picam2.start_encoder(_encoder, FileOutput(output))
             logging.info("Encoder started (viewer connected)")
 
@@ -156,17 +176,103 @@ PAGE = f"""\
 </html>
 """
 
+class ViewingStats:
+    """How much the live stream is watched, per UTC day. No addresses, no
+    identifiers: how many sessions started, how many seconds were watched in
+    total, and the most viewers at once. Kept in a small file so a restart or a
+    power cut does not lose the day, and reported in /status for the daily
+    digest, which is how we will know whether a relay is worth building.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = Lock()
+        self.data = {"day": self._today(), "today": self._empty(), "yesterday": self._empty()}
+        try:
+            with open(self.path) as f:
+                saved = json.load(f)
+            if {"day", "today", "yesterday"} <= saved.keys():
+                self.data = saved
+        except Exception:
+            pass  # first run, or unreadable: start counting from now
+
+    @staticmethod
+    def _today():
+        return datetime.now(timezone.utc).date().isoformat()
+
+    @staticmethod
+    def _empty():
+        return {"sessions": 0, "seconds": 0, "peak_viewers": 0}
+
+    def _roll(self):
+        today = self._today()
+        if self.data["day"] == today:
+            return
+        # More than a day idle: yesterday's counts are no longer yesterday's.
+        gap = (datetime.fromisoformat(today) - datetime.fromisoformat(self.data["day"])).days
+        self.data = {
+            "day": today,
+            "today": self._empty(),
+            "yesterday": self.data["today"] if gap == 1 else self._empty(),
+        }
+
+    def _save(self):
+        tmp = f"{self.path}.tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(self.data, f)
+            os.replace(tmp, self.path)
+        except Exception as e:
+            logging.warning("Could not save viewing stats: %s", e)
+
+    def session_started(self, viewers_now):
+        with self.lock:
+            self._roll()
+            self.data["today"]["sessions"] += 1
+            self.data["today"]["peak_viewers"] = max(self.data["today"]["peak_viewers"], viewers_now)
+            self._save()
+
+    def session_ended(self, seconds):
+        with self.lock:
+            self._roll()
+            self.data["today"]["seconds"] += int(seconds)
+            self._save()
+
+    def snapshot(self):
+        with self.lock:
+            self._roll()
+            return {"day": self.data["day"], "today": dict(self.data["today"]),
+                    "yesterday": dict(self.data["yesterday"])}
+
+
+stats = ViewingStats(STATS_FILE)
+
 print("Loading picamera streamer")
 
 
 class StreamingOutput(io.BufferedIOBase):
+    """The latest encoded frame, at no more than STREAM_FPS a second.
+
+    Frames arriving sooner than that are dropped here rather than sent, which is
+    what keeps a viewer's bandwidth (and John's upload) down. The encoder is also
+    asked to skip frames, but this gate is what guarantees the rate.
+    """
+
     def __init__(self):
         self.frame = None
+        self.frame_at = None
         self.condition = Condition()
+        self._interval = 1.0 / STREAM_FPS if STREAM_FPS > 0 else 0.0
+        self._last_kept = 0.0
 
     def write(self, buf):
+        now = time.monotonic()
+        if self._interval and self.frame is not None and now - self._last_kept < self._interval:
+            return
+        self._last_kept = now
         with self.condition:
             self.frame = buf
+            self.frame_at = time.time()
             self.condition.notify_all()
 
 
@@ -198,6 +304,8 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 self.send_header('Pragma', 'no-cache')
                 self.send_header('Content-Type', 'image/jpeg')
                 self.send_header('Content-Length', len(image))
+                # The weather site reads these from its own origin.
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(image)
             except Exception as e:
@@ -211,8 +319,10 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 "uptime_seconds": int(time.time() - start_time),
                 "resolution": f"{width}x{height}",
                 "hdr": hdr_enabled,
+                "stream_fps": STREAM_FPS,
                 "clients": active_clients,
                 "max_clients": MAX_STREAM_CLIENTS,
+                "viewing": stats.snapshot(),
                 "encoder_running": encoder_running(),
                 "cert_expires": cert_expires,
                 "cert_days_remaining": cert_days,
@@ -222,6 +332,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', len(content))
+            self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(content)
         elif self.path == '/stream.mjpg':
@@ -233,6 +344,9 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                     self.send_error(503, 'Too many streaming clients')
                     return
                 active_clients += 1
+                viewers_now = active_clients
+            stats.session_started(viewers_now)
+            session_started_at = time.monotonic()
             try:
                 # Not holding active_clients_lock here — see lock ordering note.
                 acquire_encoder()
@@ -241,6 +355,9 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 self.send_header('Cache-Control', 'no-cache, private')
                 self.send_header('Pragma', 'no-cache')
                 self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+                # The player reads this stream frame by frame from another origin,
+                # so it can show the time on each frame, notice a stall and reconnect.
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
 
                 # Without this the write below can block forever on a client that
@@ -266,6 +383,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                     with output.condition:
                         got_frame = output.condition.wait(timeout=5)
                         frame = output.frame
+                        frame_at = output.frame_at
                     if frame is None:
                         break
                     if not got_frame:
@@ -282,6 +400,9 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(frame))
+                    # When this frame was taken, so the viewer can show the time on
+                    # it and see at once when the picture has stopped moving.
+                    self.send_header('X-Timestamp', f"{frame_at:.3f}" if frame_at else "")
                     self.end_headers()
                     self.wfile.write(frame)
                     self.wfile.write(b'\r\n')
@@ -292,6 +413,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             finally:
                 with active_clients_lock:
                     active_clients -= 1
+                stats.session_ended(time.monotonic() - session_started_at)
                 release_encoder()
         else:
             self.send_error(404)

@@ -41,6 +41,16 @@ picamera.service               — systemd service file for the streamer itself
 
 `.env` is gitignored. `sample.env` is the committed placeholder with no real values.
 
+## Live stream rate
+
+`STREAM_FPS` (default 5) caps what each viewer is sent; `CAMERA_FPS` (25) only tells
+the encoder how many frames it may skip. The camera, `/current.jpg` and the weather
+site's captures are unaffected. Every frame carries `X-Timestamp`, and the three
+public endpoints allow cross-origin reads, because the site's player reads the stream
+frame by frame (stall detection, reconnect, showing the time on the picture).
+`/status` also reports anonymous viewing counts, kept in `/var/lib/picamera/`
+(`StateDirectory=picamera`).
+
 ## HDR
 
 HDR is controlled via a systemd drop-in override, **not** `.env`. When `HDR=1` is set, the server runs `v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0` before the camera initialises. This is necessary because the setting resets on reboot and must be applied before the camera is opened. Requires `v4l-utils` (`sudo apt install v4l-utils`).

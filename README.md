@@ -48,6 +48,32 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 | `KEYFILE` | Path to TLS private key (enables HTTPS) | *(disabled)* |
 | `CERTFILE` | Path to TLS certificate chain (enables HTTPS) | *(disabled)* |
 
+### Live stream rate
+
+`STREAM_FPS` (default 5) is how many frames a second each viewer is sent. At the
+camera's own rate one viewer pulled **15–17 Mbit/s** from a domestic upload, which is
+most of why the live view stalled and why a forgotten tab was so costly; 5 fps is
+about 3.5 Mbit/s and still shows a bird crossing the frame. Frames above the rate are
+dropped before being sent, and the encoder is told to skip them too (`CAMERA_FPS`,
+default 25, only decides how many it may skip), so the Pi does less work.
+
+**It does not touch the camera**: exposure, `/current.jpg` and the weather site's
+minute-by-minute captures are exactly as before.
+
+Each frame in the stream carries an `X-Timestamp` header (seconds since the epoch)
+so a viewer can show the time the picture was taken and see when it has stopped
+moving. `/stream.mjpg`, `/current.jpg` and `/status` send
+`Access-Control-Allow-Origin: *`, which is what lets the weather site read the
+stream frame by frame rather than handing it to an `<img>` and hoping.
+
+### Viewing counts
+
+`/status` reports `viewing`: sessions, seconds watched and the most viewers at once,
+for today and yesterday (UTC). No addresses and no identifiers. They are kept in
+`$STATE_DIRECTORY/stream-stats.json` (`/var/lib/picamera/`, made by systemd for the
+service user), so a restart does not lose the day, and they answer the question of
+whether a relay is worth building.
+
 ### HDR (wide dynamic range)
 
 HDR is controlled via a systemd drop-in override, not `.env`. To enable it manually:
