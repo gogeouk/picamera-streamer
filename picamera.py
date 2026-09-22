@@ -52,6 +52,10 @@ ENCODER_START_TIMEOUT = int(get_env_var("ENCODER_START_TIMEOUT", 10))
 # domestic upload, which is most of why the live view stalled; 5 fps is about
 # 3.5 Mbit/s and still shows a bird crossing the frame.
 STREAM_FPS = float(get_env_var("STREAM_FPS", 5))
+# What the camera itself produces, used only to tell the encoder how many frames
+# it can skip (which saves the CPU of encoding them). If it is wrong, the rate
+# above is still enforced when frames are sent.
+CAMERA_FPS = float(get_env_var("CAMERA_FPS", 25))
 # Where the viewing counts are kept, so a restart does not lose the day's totals.
 # The service cannot write to its own folder (ProtectHome=read-only) and its /tmp is
 # wiped on restart (PrivateTmp), so this goes in the state directory systemd makes
@@ -85,8 +89,10 @@ def acquire_encoder():
         if _encoder is None:
             output.frame = None  # don't serve a stale frame from the last session
             _encoder = JpegEncoder()
-            # The small stream, not the full-size one (see the camera configuration).
-            picam2.start_encoder(_encoder, FileOutput(output), name="lores")
+            # Do not even encode the frames the rate gate would throw away.
+            if STREAM_FPS > 0 and CAMERA_FPS > STREAM_FPS:
+                _encoder.frame_skip_count = max(0, int(round(CAMERA_FPS / STREAM_FPS)) - 1)
+            picam2.start_encoder(_encoder, FileOutput(output))
             logging.info("Encoder started (viewer connected)")
 
 
@@ -427,14 +433,7 @@ if hdr_enabled:
     print("HDR enabled")
 
 picam2 = Picamera2()
-# Two streams from one camera: the full-size one for snapshots (/current.jpg, and so
-# the weather site's minute-by-minute captures are unchanged), and a smaller one for
-# the live stream, which no page shows larger than this anyway. Encoding the smaller
-# stream is most of what the Pi does while someone is watching.
-video_config = picam2.create_video_configuration(
-    main={"size": (1280, 720)},
-    lores={"size": (int(width), int(height))},
-)
+video_config = picam2.create_video_configuration({"size": (1280, 720)})
 picam2.configure(video_config)
 
 picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})
