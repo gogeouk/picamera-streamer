@@ -57,8 +57,11 @@ STREAM_FPS = float(get_env_var("STREAM_FPS", 5))
 #          for as long as anyone is watching.
 #   mjpeg  the Pi's hardware JPEG encoder, fed by the camera's small stream
 #          (RESOLUTION, default 960x540, the largest any page shows it). It accepts
-#          that stream's YUV420, which the software encoder does not.
-STREAM_ENCODER = get_env_var("STREAM_ENCODER", "jpeg").strip().lower()
+#          that stream's YUV420, which the software encoder does not. Measured on
+#          Coitycam, 22 Sep 2026: 72% CPU against 215%, and 34 KB a frame against
+#          52. The default, with a fall back to jpeg if a board has no hardware
+#          encoder (a Pi 5 does not).
+STREAM_ENCODER = get_env_var("STREAM_ENCODER", "mjpeg").strip().lower()
 # Bits a second for the hardware encoder, before the rate cap throws frames away:
 # 8 Mbit/s at the camera's rate is roughly 40 KB a frame.
 MJPEG_BITRATE = int(get_env_var("MJPEG_BITRATE", 8_000_000))
@@ -94,10 +97,16 @@ def acquire_encoder():
             _encoder_stop_timer = None
         if _encoder is None:
             output.frame = None  # don't serve a stale frame from the last session
-            if STREAM_ENCODER == "mjpeg":
-                _encoder = MJPEGEncoder(bitrate=MJPEG_BITRATE)
-                picam2.start_encoder(_encoder, FileOutput(output), name="lores")
-            else:
+            started = False
+            if STREAM_ENCODER == "mjpeg" and "lores" in picam2.camera_config:
+                try:
+                    _encoder = MJPEGEncoder(bitrate=MJPEG_BITRATE)
+                    picam2.start_encoder(_encoder, FileOutput(output), name="lores")
+                    started = True
+                except Exception as e:
+                    # No hardware encoder on this board, or it refused the stream.
+                    logging.warning("Hardware encoder unavailable (%s); using the software one", e)
+            if not started:
                 _encoder = JpegEncoder()
                 picam2.start_encoder(_encoder, FileOutput(output))
             logging.info("Encoder started (viewer connected)")
