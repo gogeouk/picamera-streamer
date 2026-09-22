@@ -54,8 +54,10 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 camera's own rate one viewer pulled **15–17 Mbit/s** from a domestic upload, which is
 most of why the live view stalled and why a forgotten tab was so costly; 5 fps is
 about 3.5 Mbit/s and still shows a bird crossing the frame. Frames above the rate are
-dropped before being sent, and the encoder is told to skip them too (`CAMERA_FPS`,
-default 25, only decides how many it may skip), so the Pi does less work.
+dropped before being sent. The stream is also encoded from a second, smaller camera
+stream (`RESOLUTION`, default 960×540) rather than the full-size one, which is most
+of the Pi's work while someone watches; snapshots still come from the full-size
+stream.
 
 **It does not touch the camera**: exposure, `/current.jpg` and the weather site's
 minute-by-minute captures are exactly as before.

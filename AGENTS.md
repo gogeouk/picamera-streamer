@@ -43,9 +43,11 @@ picamera.service               — systemd service file for the streamer itself
 
 ## Live stream rate
 
-`STREAM_FPS` (default 5) caps what each viewer is sent; `CAMERA_FPS` (25) only tells
-the encoder how many frames it may skip. The camera, `/current.jpg` and the weather
-site's captures are unaffected. Every frame carries `X-Timestamp`, and the three
+`STREAM_FPS` (default 5) caps what each viewer is sent, and the stream is encoded
+from a second, smaller camera stream (`RESOLUTION`, default 960×540); `/current.jpg`
+and the weather site's captures still come from the full-size stream, unchanged.
+(picamera2's `frame_skip_count` looks like a rate control but does nothing in
+0.3.23: it is not read anywhere in the installed package.) Every frame carries `X-Timestamp`, and the three
 public endpoints allow cross-origin reads, because the site's player reads the stream
 frame by frame (stall detection, reconnect, showing the time on the picture).
 `/status` also reports anonymous viewing counts, kept in `/var/lib/picamera/`
