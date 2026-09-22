@@ -296,18 +296,22 @@ class StreamingOutput(io.BufferedIOBase):
 class StreamingHandler(server.BaseHTTPRequestHandler):
     def do_GET(self):
         global active_clients, active_clients_lock
-        if self.path == '/':
+        # Anything after '?' is not part of the route: a page adding a cache-buster
+        # (current.jpg?t=…) was answered 404, and a 404 carries no CORS headers, so
+        # the browser reported it as a permissions problem (22 Sep 2026).
+        path = self.path.split('?', 1)[0]
+        if path == '/':
             self.send_response(301)
             self.send_header('Location', '/index.html')
             self.end_headers()
-        elif self.path == '/index.html':
+        elif path == '/index.html':
             content = PAGE.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.send_header('Content-Length', len(content))
             self.end_headers()
             self.wfile.write(content)
-        elif self.path == '/current.jpg':
+        elif path == '/current.jpg':
             try:
                 data = io.BytesIO()
                 picam2.capture_file(data, format='jpeg')
@@ -329,7 +333,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 logging.warning(
                     'Removed streaming client %s: %s',
                     self.client_address, str(e))
-        elif self.path == '/status':
+        elif path == '/status':
             cert_expires, cert_days = cert_status()
             status = {
                 "name": get_env_var("NAME", "Picamera"),
@@ -353,7 +357,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(content)
-        elif self.path == '/stream.mjpg':
+        elif path == '/stream.mjpg':
             with active_clients_lock:
                 if active_clients >= MAX_STREAM_CLIENTS:
                     logging.warning(
