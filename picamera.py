@@ -20,7 +20,7 @@ from threading import Condition, Lock, Timer
 from tools.getenv import get_env_var
 
 from picamera2 import Picamera2
-from picamera2.encoders import JpegEncoder
+from picamera2.encoders import JpegEncoder, MJPEGEncoder
 from picamera2.outputs import FileOutput
 width, height = get_env_var("RESOLUTION", "960x540").split("x")
 hdr_enabled = get_env_var("HDR", "0").strip().lower() in ("1", "true", "yes")
@@ -52,10 +52,16 @@ ENCODER_START_TIMEOUT = int(get_env_var("ENCODER_START_TIMEOUT", 10))
 # domestic upload, which is most of why the live view stalled; 5 fps is about
 # 3.5 Mbit/s and still shows a bird crossing the frame.
 STREAM_FPS = float(get_env_var("STREAM_FPS", 5))
-# What the camera itself produces, used only to tell the encoder how many frames
-# it can skip (which saves the CPU of encoding them). If it is wrong, the rate
-# above is still enforced when frames are sent.
-CAMERA_FPS = float(get_env_var("CAMERA_FPS", 25))
+# Which encoder makes the stream's JPEGs.
+#   jpeg   software (simplejpeg) on the full-size frames: about 215% CPU on a Pi 3B
+#          for as long as anyone is watching.
+#   mjpeg  the Pi's hardware JPEG encoder, fed by the camera's small stream
+#          (RESOLUTION, default 960x540, the largest any page shows it). It accepts
+#          that stream's YUV420, which the software encoder does not.
+STREAM_ENCODER = get_env_var("STREAM_ENCODER", "jpeg").strip().lower()
+# Bits a second for the hardware encoder, before the rate cap throws frames away:
+# 8 Mbit/s at the camera's rate is roughly 40 KB a frame.
+MJPEG_BITRATE = int(get_env_var("MJPEG_BITRATE", 8_000_000))
 # Where the viewing counts are kept, so a restart does not lose the day's totals.
 # The service cannot write to its own folder (ProtectHome=read-only) and its /tmp is
 # wiped on restart (PrivateTmp), so this goes in the state directory systemd makes
@@ -88,11 +94,12 @@ def acquire_encoder():
             _encoder_stop_timer = None
         if _encoder is None:
             output.frame = None  # don't serve a stale frame from the last session
-            _encoder = JpegEncoder()
-            # Do not even encode the frames the rate gate would throw away.
-            if STREAM_FPS > 0 and CAMERA_FPS > STREAM_FPS:
-                _encoder.frame_skip_count = max(0, int(round(CAMERA_FPS / STREAM_FPS)) - 1)
-            picam2.start_encoder(_encoder, FileOutput(output))
+            if STREAM_ENCODER == "mjpeg":
+                _encoder = MJPEGEncoder(bitrate=MJPEG_BITRATE)
+                picam2.start_encoder(_encoder, FileOutput(output), name="lores")
+            else:
+                _encoder = JpegEncoder()
+                picam2.start_encoder(_encoder, FileOutput(output))
             logging.info("Encoder started (viewer connected)")
 
 
@@ -320,6 +327,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 "resolution": f"{width}x{height}",
                 "hdr": hdr_enabled,
                 "stream_fps": STREAM_FPS,
+                "stream_encoder": STREAM_ENCODER,
                 "clients": active_clients,
                 "max_clients": MAX_STREAM_CLIENTS,
                 "viewing": stats.snapshot(),
@@ -433,7 +441,13 @@ if hdr_enabled:
     print("HDR enabled")
 
 picam2 = Picamera2()
-video_config = picam2.create_video_configuration({"size": (1280, 720)})
+# The full-size stream feeds /current.jpg, and so the weather site's minute-by-minute
+# captures; the small one exists only for the hardware encoder.
+video_config = (
+    picam2.create_video_configuration(main={"size": (1280, 720)}, lores={"size": (int(width), int(height))})
+    if STREAM_ENCODER == "mjpeg"
+    else picam2.create_video_configuration({"size": (1280, 720)})
+)
 picam2.configure(video_config)
 
 picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})
