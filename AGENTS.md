@@ -53,6 +53,24 @@ frame by frame (stall detection, reconnect, showing the time on the picture).
 `/status` also reports anonymous viewing counts, kept in `/var/lib/picamera/`
 (`StateDirectory=picamera`).
 
+### CPU while someone watches (open)
+
+Encoding the stream costs about 215% CPU on a Pi 3B, and the 5 fps cap does not
+change that: every frame is still encoded and the extras are dropped afterwards.
+Two dead ends, so nobody repeats them:
+
+- `frame_skip_count` on the encoder looks like a rate control but is not read
+  anywhere in picamera2 0.3.23. Setting it does nothing.
+- Encoding the camera's small (`lores`) stream instead fails: on this pipeline that
+  stream is YUV420, and `JpegEncoder` has no entry for it
+  (`KeyError: 'YUV420'`, 22 Sep 2026). Tried and reverted.
+
+The promising route is `MJPEGEncoder`, which uses the Pi's hardware JPEG encoder and
+does accept YUV420, so it could encode the small stream at a fraction of the CPU.
+Test it with the service stopped, between captures, before deploying. The cost is
+only paid while someone is watching (the encoder is on demand), so this is
+worth doing but not urgent.
+
 ## HDR
 
 HDR is controlled via a systemd drop-in override, **not** `.env`. When `HDR=1` is set, the server runs `v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0` before the camera initialises. This is necessary because the setting resets on reboot and must be applied before the camera is opened. Requires `v4l-utils` (`sudo apt install v4l-utils`).
