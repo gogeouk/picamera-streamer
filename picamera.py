@@ -98,13 +98,14 @@ def acquire_encoder():
         if _encoder is None:
             output.frame = None  # don't serve a stale frame from the last session
             started = False
-            if STREAM_ENCODER == "mjpeg" and "lores" in picam2.camera_config:
+            if STREAM_ENCODER == "mjpeg" and (picam2.camera_config or {}).get("lores"):
                 try:
                     _encoder = MJPEGEncoder(bitrate=MJPEG_BITRATE)
                     picam2.start_encoder(_encoder, FileOutput(output), name="lores")
                     started = True
                 except Exception as e:
                     # No hardware encoder on this board, or it refused the stream.
+                    _encoder = None
                     logging.warning("Hardware encoder unavailable (%s); using the software one", e)
             if not started:
                 _encoder = JpegEncoder()

@@ -51,23 +51,25 @@ frame by frame (stall detection, reconnect, showing the time on the picture).
 `/status` also reports anonymous viewing counts, kept in `/var/lib/picamera/`
 (`StateDirectory=picamera`).
 
-### CPU while someone watches (open)
+### CPU while someone watches (fixed 22 Sep 2026)
 
-Encoding the stream costs about 215% CPU on a Pi 3B, and the 5 fps cap does not
-change that: every frame is still encoded and the extras are dropped afterwards.
-Two dead ends, so nobody repeats them:
+Encoding the stream in software cost about 215% CPU on a Pi 3B, and the 5 fps cap did
+not change that: every frame was still encoded and the extras dropped afterwards.
+
+`MJPEGEncoder` fixed it. It drives the Pi's hardware JPEG encoder and accepts the
+camera's small (`lores`) YUV420 stream, so the stream is now encoded at `RESOLUTION`
+(960x540) instead of full size: **72% CPU against 215%, and 34 KB a frame against
+52** — 1.2 Mbit/s a viewer, from 11.2 at the start of the day. It is the default
+(`STREAM_ENCODER=mjpeg`); `jpeg` goes back to the software encoder, and a board with
+no hardware encoder falls back to it by itself.
+
+Two dead ends on the way, so nobody repeats them:
 
 - `frame_skip_count` on the encoder looks like a rate control but is not read
   anywhere in picamera2 0.3.23. Setting it does nothing.
-- Encoding the camera's small (`lores`) stream instead fails: on this pipeline that
-  stream is YUV420, and `JpegEncoder` has no entry for it
-  (`KeyError: 'YUV420'`, 22 Sep 2026). Tried and reverted.
-
-The promising route is `MJPEGEncoder`, which uses the Pi's hardware JPEG encoder and
-does accept YUV420, so it could encode the small stream at a fraction of the CPU.
-Test it with the service stopped, between captures, before deploying. The cost is
-only paid while someone is watching (the encoder is on demand), so this is
-worth doing but not urgent.
+- `JpegEncoder` on the `lores` stream fails: that stream is YUV420 and the software
+  encoder has no entry for it (`KeyError: 'YUV420'`, 22 Sep 2026). Only the hardware
+  encoder takes it.
 
 ## HDR
 

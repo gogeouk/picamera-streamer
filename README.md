@@ -44,7 +44,10 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 |---|---|---|
 | `NAME` | Camera name shown on the stream page | `Picamera` |
 | `PORT` | HTTP/HTTPS port to serve on | `8000` |
-| `RESOLUTION` | Capture resolution as `WIDTHxHEIGHT` | `960x540` |
+| `RESOLUTION` | Live stream resolution as `WIDTHxHEIGHT` (snapshots are always 1280x720) | `960x540` |
+| `STREAM_FPS` | Frames a second sent to each viewer | `5` |
+| `STREAM_ENCODER` | `mjpeg` (the Pi's hardware encoder) or `jpeg` (software) | `mjpeg` |
+| `MJPEG_BITRATE` | Quality of the hardware encoder, in bits a second | `8000000` |
 | `KEYFILE` | Path to TLS private key (enables HTTPS) | *(disabled)* |
 | `CERTFILE` | Path to TLS certificate chain (enables HTTPS) | *(disabled)* |
 
@@ -53,12 +56,19 @@ Create a `.env` file in the project directory to configure the service. A `sampl
 `STREAM_FPS` (default 5) is how many frames a second each viewer is sent. At the
 camera's own rate one viewer pulled **15–17 Mbit/s** from a domestic upload, which is
 most of why the live view stalled and why a forgotten tab was so costly; 5 fps is
-about 3.5 Mbit/s and still shows a bird crossing the frame. Frames above the rate are
-dropped before being sent, and the encoder is told to skip them too (`CAMERA_FPS`,
-default 25, only decides how many it may skip), so the Pi does less work.
+about 1.2 Mbit/s and still shows a bird crossing the frame. Frames above the rate are
+dropped before being sent.
 
-**It does not touch the camera**: exposure, `/current.jpg` and the weather site's
-minute-by-minute captures are exactly as before.
+The stream is encoded by the **Pi's hardware JPEG encoder** (`STREAM_ENCODER=mjpeg`)
+from a second, smaller camera stream at `RESOLUTION` — 960x540, the largest any page
+shows it. Measured on Coitycam, 22 September 2026: **72% CPU** while someone watches
+against 215% for the software encoder, and **34 KB a frame** against 52.
+`STREAM_ENCODER=jpeg` goes back to the software encoder on full-size frames, and a
+board with no hardware encoder (a Pi 5) falls back to it by itself, with a line in
+the journal.
+
+**None of this touches the camera**: exposure, `/current.jpg` and the weather site's
+minute-by-minute captures are full size (1280x720) and exactly as before.
 
 Each frame in the stream carries an `X-Timestamp` header (seconds since the epoch)
 so a viewer can show the time the picture was taken and see when it has stopped
