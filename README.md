@@ -151,3 +151,13 @@ certbot renews certificates automatically via a system timer. To make it also co
         sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/picamera-cert-deploy.sh
 
 After this, every time certbot renews the certificate (typically every 60 days), the new certs will be deployed and the service restarted automatically — no manual intervention needed.
+
+## Licence
+
+[AGPL-3.0](LICENSE) since 24 September 2026. You may run, modify and redistribute this
+freely. If you run a modified version as a network service, you must publish your
+modifications. Earlier versions were released under the BSD 2-Clause licence and remain
+available under it.
+
+`picamera.py` began as the MJPEG streaming example from the picamera documentation, which
+is BSD-licensed; the link to its licence is kept in the file's header.
