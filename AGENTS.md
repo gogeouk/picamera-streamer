@@ -85,7 +85,7 @@ sudo systemctl daemon-reload && sudo systemctl restart picamera.service
 
 To disable: `sudo rm /etc/systemd/system/picamera.service.d/hdr.conf && sudo systemctl daemon-reload && sudo systemctl restart picamera.service`
 
-The `picamera-monitor` dashboard HDR On/Off buttons do this automatically via SSH. Do **not** add `HDR=` to `.env` — that file is for static config only.
+The `picamera-monitor` dashboard's HDR On/Off buttons do this over SSH, through `monitor-gate.sh`, until the dashboard retires (gogeo's roadmap, Step 7); after that HDR is switched by hand as above. Do **not** add `HDR=` to `.env` — that file is for static config only.
 
 ## Known issues resolved (important context)
 
@@ -146,7 +146,7 @@ both. Now:
 | Key | Accepted by | Can do |
 |---|---|---|
 | Lee's own (`code@corbin.uk`) | both Pis | anything |
-| `picamera-monitor@ontoast` | both Pis | `monitor-gate.sh` verbs only |
+| `picamera-monitor@<server>` (the dashboard's own) | both Pis | `monitor-gate.sh` verbs only, and only from the dashboard server's address (`from=`) |
 | `cert-sync@geoone` (root-owned, `/etc/picamera-cert-deploy/`) | geotwo | `cert-receive.sh`: install a certificate that is valid, matches its key, covers the same names and is not older |
 
 geoone's own `lee@geoone` key is no longer accepted anywhere. The hook pins geotwo's
@@ -162,11 +162,13 @@ so with lee's personal key, which has passwordless root here, mounted into a
 web-facing container. It now has its own key, installed in `~/.ssh/authorized_keys`
 as:
 
-    restrict,command="/home/lee/picamera-streamer/monitor-gate.sh" ssh-ed25519 AAAA... picamera-monitor@ontoast
+    restrict,from="<dashboard server's address>",command="/home/lee/picamera-streamer/monitor-gate.sh" ssh-ed25519 AAAA... picamera-monitor@<server>
 
 so it can only `probe`, `start`, `stop`, `restart`, `hdr-on` or `hdr-off`. Anything
 else is refused and logged (`journalctl -t monitor-gate`). If the dashboard needs a new
-ability, add a verb to the gate; never loosen the key.
+ability, add a verb to the gate; never loosen the key. The key was replaced when the
+dashboard moved server on 23 Sep 2026 (`from=` added then), and it comes off both Pis
+when the dashboard retires; the Pis will report their health over MQTT instead, publish-only.
 
 ### Health check restarted healthy cameras under load (fixed 2026-09-21)
 
@@ -214,15 +216,14 @@ Fixed with three limits, all overridable in `.env`:
 
 ### Known, not yet fixed
 
-- **The encoder runs continuously even with zero viewers.** Both Pis sit at ~215% CPU
-  permanently. `start_recording()` encodes regardless of demand; only the encoder needs to
-  stop when idle, as `/current.jpg` uses `capture_file()` and needs the camera itself running.
-- **`RESOLUTION` does not configure the camera.** `create_video_configuration` hardcodes
-  `1280x720`; the env var only sets the `<img>` dimensions on the viewer page. Lowering the
-  real capture resolution is the cheapest thermal win available.
-- **geoone runs hot.** 77.4 °C versus 54.8 °C on geotwo, identical hardware (Pi 3B) and
-  identical load. `get_throttled` reports `0x70005` on both — under-voltage and throttling
-  active now, plus historical frequency capping. Enclosure and power supply, not software.
+- **Power.** On 23 Sep 2026 both Pis reported `get_throttled` `0x50005`, under-voltage and
+  throttling at that moment, at 56–61 °C. In August geoone ran at 77.4 °C against 54.8 °C on
+  geotwo, identical hardware and load. Power supplies and enclosure, not software.
+
+Fixed since this list was first written: the encoder starts on demand and stops about 20
+seconds after the last viewer leaves, in hardware (see *CPU while someone watches*); and
+`RESOLUTION` now sets the size of the stream (the camera's second, `lores`, stream), while
+`/current.jpg` stays full-size, 1280×720.
 
 ## Certificate setup (HTTPS)
 
@@ -232,9 +233,9 @@ Both Pis use Let's Encrypt via certbot `--standalone`. The domain `your-domain.d
 A deploy hook at `/etc/letsencrypt/renewal-hooks/deploy/picamera-streamer.sh` (on Pi 1, local only — not in the repo):
 1. Copies fresh certs into `~/picamera-streamer/certificates/`
 2. Restarts `picamera.service` on Pi 1
-3. SCPs the certs to Pi 2 and restarts its service via SSH
+3. Pushes the certs to Pi 2, where `cert-receive.sh` checks and installs them
 
-Pi 1 → Pi 2 key-based SSH is required for step 3. Pi 1's key (`lee@geoone`) is in Pi 2's `~/.ssh/authorized_keys`. `systemd-files/picamera-cert-deploy.sh` is a generic template version showing the pattern; the live hook on Pi 1 is configured with real paths and is not committed.
+Step 3 uses the root-owned `cert-sync@geoone` key, which geotwo accepts only for `cert-receive.sh` (see *Who can log in where*). `lee@geoone` is accepted nowhere. `systemd-files/picamera-cert-deploy.sh` is a generic template version showing the pattern; the live hook on Pi 1 is configured with real paths and is not committed.
 
 If Let's Encrypt symlinks under `/etc/letsencrypt/live/` are missing (can happen after a failed renewal), recreate them pointing at the most recent complete archive set before running `certbot renew`.
 
@@ -271,6 +272,6 @@ ssh lee@pi-host.example.com -p <pi2-ssh-port> 'cd ~/picamera-streamer && git pul
 - `.env` (real camera config, KEYFILE/CERTFILE paths)
 - `certificates/` (TLS certs and keys)
 - `.vscode/sftp.json` (contains SSH passwords)
-- Any file with real hostnames (`your-domain.duckdns.org`, `pi-host.example.com`) or credentials
+- Any real hostname, IP address or port number of the cameras, or any credential
 
 The `.gitignore` covers all of the above. The `systemd-files/picamera-cert-deploy.sh` in the repo is a generic template only — the live version on Pi 1 contains real paths and is not committed.
