@@ -464,6 +464,9 @@ video_config = (
 )
 picam2.configure(video_config)
 
+# PRIVACY CONTROL, not framing: this sensor crop keeps a neighbouring property out of
+# the picture. Every capture this camera makes, whatever its size or mode, must use
+# exactly this crop, or it shows what the crop hides. See AGENTS.md, "Privacy crop".
 picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})
 time.sleep(5)
 

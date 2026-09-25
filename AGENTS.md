@@ -71,6 +71,20 @@ Two dead ends on the way, so nobody repeats them:
   encoder has no entry for it (`KeyError: 'YUV420'`, 22 Sep 2026). Only the hardware
   encoder takes it.
 
+## Privacy crop
+
+`picam2.set_controls({"ScalerCrop": (0, 0, 4008, 2250)})` is a **privacy control**: the
+sensor crop keeps a neighbouring property out of the picture. It is not framing and
+must not be tuned for looks.
+
+- Every capture must use exactly this crop: the stream, `/current.jpg`, and any
+  larger or full-resolution still added later. A capture that switches sensor mode
+  or configuration must set it again before the first frame it returns.
+- In the HDR sensor mode (2304×1296) the crop leaves about 2004×1125 real pixels;
+  without HDR, 4008×2250. The main stream is 1280×720 today.
+- Changing it needs the owner's say-so, and a check of the new picture before it goes
+  anywhere public.
+
 ## HDR
 
 HDR is controlled via a systemd drop-in override, **not** `.env`. When `HDR=1` is set, the server runs `v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0` before the camera initialises. This is necessary because the setting resets on reboot and must be applied before the camera is opened. Requires `v4l-utils` (`sudo apt install v4l-utils`).
