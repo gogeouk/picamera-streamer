@@ -241,6 +241,13 @@ restarted the service: 2 to 5 archive frames lost each time. These looked like r
 from outside, because `/status` reports the streamer's uptime, not the Pi's; the Pi
 itself had not rebooted. No live viewers were involved: it is the still capture alone.
 
+It is Valleycam's alone, and not new: 20 such restarts from 3 to 20 Oct 2026 (as far
+back as its journal goes), about one a day, at the same rate before and after its power
+supply was replaced on 17 Oct. Coitycam had none in that time, with its sensor nearly
+as hot (77 against 80 °C). So neither power nor sensor heat alone explains it; the
+camera's ribbon cable, its connectors, or the module itself are the suspects (a stall
+on 25 Sep 2026 logged libcamera's "try another cable and/or sensor").
+
 `tools/camerawatch.py` now bounds every camera wait (`CAPTURE_TIMEOUT`, 10 s) and probes
 the camera every `CAMERA_PROBE_INTERVAL` (15 s) seconds between captures. A camera that
 does not answer ends the process with exit code 3, and `Restart=on-failure` brings it
