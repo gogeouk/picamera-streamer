@@ -26,6 +26,10 @@ chmod 640 "$KEY"
 
 install -D -m 644 "$APP/systemd-files/picamera-user.conf" /etc/systemd/system/picamera.service.d/user.conf
 
+# The per-minute temperature and power log (tools/thermal-log.sh), 20 Oct 2026.
+install -m 644 "$APP/systemd-files/picamera-thermal.service" /etc/systemd/system/picamera-thermal.service
+install -m 644 "$APP/systemd-files/picamera-thermal.timer" /etc/systemd/system/picamera-thermal.timer
+
 # On the Pi that renews the certificate, the INSTALLED hook must be the version that
 # keeps the key readable by picamera. A git pull alone does not update it: on
 # 2026-09-22 the old installed copy ran, reset the key to 600 lee:lee, and Valleycam
@@ -36,9 +40,10 @@ if [ -d "$(dirname "$HOOK")" ]; then
   echo "installed the current certificate hook at $HOOK"
 fi
 systemctl daemon-reload
+systemctl enable --now picamera-thermal.timer
 
 fail=0
-for f in "$APP/picamera.py" "$APP/tools/getenv.py" "$APP/.env" "$APP/certificates/fullchain.pem" "$KEY"; do
+for f in "$APP/picamera.py" "$APP/tools/getenv.py" "$APP/tools/camerawatch.py" "$APP/tools/thermal-log.sh" "$APP/.env" "$APP/certificates/fullchain.pem" "$KEY"; do
   sudo -u picamera test -r "$f" || { echo "picamera CANNOT read $f"; fail=1; }
 done
 sudo -u picamera test -r "$HOME_DIR/.ssh/authorized_keys" 2>/dev/null && { echo "picamera CAN read .ssh - wrong"; fail=1; }

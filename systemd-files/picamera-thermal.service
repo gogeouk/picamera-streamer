@@ -1,0 +1,15 @@
+# One line a minute of the Pi's temperature, clock, voltage and throttle flags: see
+# tools/thermal-log.sh. Installed and enabled by setup-service-user.sh.
+[Unit]
+Description=Log the camera Pi's temperature and power
+
+[Service]
+Type=oneshot
+User=picamera
+Group=picamera
+SupplementaryGroups=video
+StateDirectory=picamera
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ExecStart=/home/lee/picamera-streamer/tools/thermal-log.sh

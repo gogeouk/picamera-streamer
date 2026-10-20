@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from http import server
 from threading import Condition, Lock, Timer
 from tools.getenv import get_env_var
+from tools.camerawatch import CameraWatch
 
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder, MJPEGEncoder
@@ -71,6 +72,12 @@ MJPEG_BITRATE = int(get_env_var("MJPEG_BITRATE", 8_000_000))
 # for it: StateDirectory=picamera, which is /var/lib/picamera, owned by the service
 # user. Falls back to the working directory when run by hand.
 STATS_FILE = get_env_var("STATS_FILE", os.path.join(os.environ.get("STATE_DIRECTORY", "."), "stream-stats.json"))
+# A camera that stops answering ends the process so systemd restarts it at once
+# (tools/camerawatch.py): every capture waits at most CAPTURE_TIMEOUT seconds, and a
+# probe checks the camera every CAMERA_PROBE_INTERVAL seconds between captures.
+CAPTURE_TIMEOUT = float(get_env_var("CAPTURE_TIMEOUT", "10"))
+CAMERA_PROBE_INTERVAL = float(get_env_var("CAMERA_PROBE_INTERVAL", "15"))
+SENSOR_TEMP_FILE = os.path.join(os.environ["STATE_DIRECTORY"], "sensor-temp") if os.environ.get("STATE_DIRECTORY") else None
 
 encoder_lock = Lock()
 _encoder = None
@@ -314,7 +321,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
         elif path == '/current.jpg':
             try:
                 data = io.BytesIO()
-                picam2.capture_file(data, format='jpeg')
+                camera_watch.timed("/current.jpg", lambda: picam2.capture_file(data, format='jpeg', wait=False))
                 if data.getvalue() == b"":
                     self.send_error(404, "Image Not Found")
                     return
@@ -474,6 +481,8 @@ output = StreamingOutput()
 # Camera on, encoder off. /current.jpg uses capture_file() which only needs the
 # camera running; the encoder is started on demand by the first stream viewer.
 picam2.start()
+camera_watch = CameraWatch(picam2, timeout=CAPTURE_TIMEOUT, interval=CAMERA_PROBE_INTERVAL,
+                           sensor_temp_file=SENSOR_TEMP_FILE).start()
 
 try:
     port = int(get_env_var("PORT", 8000))

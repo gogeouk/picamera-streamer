@@ -1,0 +1,10 @@
+# Every minute, at second 45: clear of the weather site's capture at second 30.
+[Unit]
+Description=Log the camera Pi's temperature and power every minute
+
+[Timer]
+OnCalendar=*:*:45
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

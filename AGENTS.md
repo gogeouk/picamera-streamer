@@ -18,14 +18,18 @@ picamera.py                    — main server (single file)
 tools/
   getenv.py                    — .env parser (split on first = only)
   duckdns.py                   — DuckDNS IP updater (placeholder tokens, fill in locally)
+  camerawatch.py               — time limits on camera calls, and the probe that restarts a stalled camera
+  thermal-log.sh               — one line a minute of temperature, clock, voltage, throttle flags
 systemd-files/
   picamera-monitor.service     — systemd one-shot for health check
   picamera-monitor.timer       — fires 1 min after boot, then every 5 min
+  picamera-thermal.service/.timer — runs tools/thermal-log.sh every minute
   picamera-cert-deploy.sh      — generic template for certbot deploy hook (edit before use)
 health_check.sh                — curl /current.jpg with timeout; retries once after 20 s, restarts only if both fail
 monitor-gate.sh                — the ONLY command the dashboard's SSH key may run (forced command in authorized_keys)
 cert-receive.sh                — the ONLY command the certificate-sync key may run on the peer Pi
 sample.env                     — template for .env (committed; no real values)
+tests/                         — unit tests that need no camera: python3 -m unittest discover -s tests
 picamera.service               — systemd service file for the streamer itself
 ```
 
@@ -228,11 +232,41 @@ Fixed with three limits, all overridable in `.env`:
 | `STREAM_CLIENT_TIMEOUT` | 20 | Socket write timeout, so a dead peer raises instead of blocking |
 | `STREAM_STALL_TIMEOUT` | 15 | Drop a client if the camera produces no new frame, instead of re-sending a stale one forever |
 
+### Silent camera stalls: the camera watch (20 Oct 2026)
+
+From 17 to 20 Oct 2026 Valleycam's camera stopped returning pictures three times, with
+no error anywhere (streamer, libcamera, kernel). The capture call never came back,
+/status went quiet under a minute later, and `health_check.sh` (every 5 minutes)
+restarted the service: 2 to 5 archive frames lost each time. These looked like reboots
+from outside, because `/status` reports the streamer's uptime, not the Pi's; the Pi
+itself had not rebooted. No live viewers were involved: it is the still capture alone.
+
+`tools/camerawatch.py` now bounds every camera wait (`CAPTURE_TIMEOUT`, 10 s) and probes
+the camera every `CAMERA_PROBE_INTERVAL` (15 s) seconds between captures. A camera that
+does not answer ends the process with exit code 3, and `Restart=on-failure` brings it
+straight back: a stall costs at most a frame. `journalctl -u picamera | grep "Camera
+stalled"` lists them. The probe also writes the sensor's own temperature, when it
+reports one, to `$STATE_DIRECTORY/sensor-temp`. Tests: `python3 -m unittest discover -s
+tests` (no camera needed).
+
+### Temperature log (20 Oct 2026)
+
+`tools/thermal-log.sh`, every minute from `picamera-thermal.timer` (installed by the
+setup script), appends one line to `/var/lib/picamera/thermal-YYYY-MM.csv`: SoC and
+sensor temperature, ARM clock, core voltage, throttle flags, load, and the streamer's
+state and CPU use. It runs apart from the streamer, so it keeps logging through a stall.
+
 ### Known, not yet fixed
 
-- **Power.** On 23 Sep 2026 both Pis reported `get_throttled` `0x50005`, under-voltage and
-  throttling at that moment, at 56–61 °C. In August geoone ran at 77.4 °C against 54.8 °C on
-  geotwo, identical hardware and load. Power supplies and enclosure, not software.
+- **Power and heat.** geoone's power supply was replaced on 17 Oct 2026: no under-voltage
+  since (`0x60000`), so it now runs at the full 1200 MHz at 1.28 V, and it gets hot (85 °C
+  at its peak, when the firmware caps its clock: bits 17 and 18). geotwo was still
+  under-volted on 20 Oct (`0x70005`, under-voltage now), held at 600 MHz and 1.20 V, which
+  is why it runs cooler: compare them only like for like (the temperature log has the
+  clock and flags). Even when both were under-volted, in August, geoone ran about 20 °C
+  hotter (77.4 against 54.8 °C). The boards differ (revision a22082, made by Embest,
+  against a02082, Sony) and geoone's chip is calibrated to a higher voltage; a heatsink
+  or vent difference would only show on site.
 
 Fixed since this list was first written: the encoder starts on demand and stops about 20
 seconds after the last viewer leaves, in hardware (see *CPU while someone watches*); and
