@@ -19,6 +19,7 @@ tools/
   getenv.py                    — .env parser (split on first = only)
   duckdns.py                   — DuckDNS IP updater (placeholder tokens, fill in locally)
   camerawatch.py               — time limits on camera calls, and the probe that restarts a stalled camera
+  tlsserver.py                 — the HTTP(S) server: each TLS handshake in its connection's own thread, time-limited
   thermal-log.sh               — one line a minute of temperature, clock, voltage, throttle flags
 systemd-files/
   picamera-monitor.service     — systemd one-shot for health check
@@ -42,6 +43,8 @@ picamera.service               — systemd service file for the streamer itself
 | `RESOLUTION` | `WIDTHxHEIGHT` | `960x540` |
 | `KEYFILE` | TLS private key path (enables HTTPS) | disabled |
 | `CERTFILE` | TLS cert chain path (enables HTTPS) | disabled |
+| `TLS_HANDSHAKE_TIMEOUT` | Seconds a client gets to finish its TLS handshake | `10` |
+| `REQUEST_TIMEOUT` | Seconds any one read or write then waits on a client (the stream uses `STREAM_CLIENT_TIMEOUT`) | `30` |
 
 `.env` is gitignored. `sample.env` is the committed placeholder with no real values.
 
@@ -232,23 +235,39 @@ Fixed with three limits, all overridable in `.env`:
 | `STREAM_CLIENT_TIMEOUT` | 20 | Socket write timeout, so a dead peer raises instead of blocking |
 | `STREAM_STALL_TIMEOUT` | 15 | Drop a client if the camera produces no new frame, instead of re-sending a stale one forever |
 
-### Silent camera stalls: the camera watch (20 Oct 2026)
+### One silent client froze the whole server (fixed 22 Oct 2026)
 
-From 17 to 20 Oct 2026 Valleycam's camera stopped returning pictures three times, with
-no error anywhere (streamer, libcamera, kernel). The capture call never came back,
-/status went quiet under a minute later, and `health_check.sh` (every 5 minutes)
-restarted the service: 2 to 5 archive frames lost each time. These looked like reboots
-from outside, because `/status` reports the streamer's uptime, not the Pi's; the Pi
-itself had not rebooted. No live viewers were involved: it is the still capture alone.
+From 17 to 20 Oct 2026 Valleycam stopped returning pictures three times, with no error
+anywhere (streamer, libcamera, kernel). /status went quiet too, and `health_check.sh`
+(every 5 minutes) restarted the service: 2 to 5 archive frames lost each time. These
+looked like reboots from outside, because `/status` reports the streamer's uptime, not
+the Pi's; the Pi itself had not rebooted. Its journal showed 20 such restarts from 3 to
+20 Oct 2026 (as far back as it goes), about one a day, and Coitycam none.
 
-It is Valleycam's alone, and not new: 20 such restarts from 3 to 20 Oct 2026 (as far
-back as its journal goes), about one a day, at the same rate before and after its power
-supply was replaced on 17 Oct. Coitycam had none in that time, with its sensor nearly
-as hot (77 against 80 °C). So neither power nor sensor heat alone explains it; the
-camera's ribbon cable, its connectors, or the module itself are the suspects (a stall
-on 25 Sep 2026 logged libcamera's "try another cable and/or sensor").
+It was not the camera. The server wrapped its listening socket in TLS
+(`server.socket = context.wrap_socket(...)`), which does every TLS handshake inside
+accept(), in the one thread that accepts connections, with no time limit. Anything that
+connects and never sends its TLS hello, as internet port scanners do all day, blocked
+that thread and so every request after it, until it gave up or the health check
+restarted the service; the camera carried on throughout. Reproduced on 22 Oct 2026 on
+Valleycam: with one idle TCP connection open, /status did not answer; with it closed,
+it answered in 0.1 s. And the camera watch below, deployed on 20 Oct, saw nothing during
+the next freeze on 21 Oct: the camera answered its probes the whole time. Why Valleycam
+alone: it is the one scanners find most, not a fault of its own.
 
-`tools/camerawatch.py` now bounds every camera wait (`CAPTURE_TIMEOUT`, 10 s) and probes
+`tools/tlsserver.py` now leaves the listening socket plain and does each handshake in
+that connection's own thread, within `TLS_HANDSHAKE_TIMEOUT` (10 s); each read or write
+after it waits at most `REQUEST_TIMEOUT` (30 s). A silent client holds up nobody but
+itself and is dropped when its time runs out. `tests/test_tlsserver.py` opens silent
+connections and checks other requests are still answered (that test fails against the
+old design).
+
+### The camera watch (20 Oct 2026)
+
+Written when the freezes above were thought to be the camera, and kept as a guard: a
+camera that really does stop answering would freeze the pictures the same way (one
+did on 25 Sep 2026, when libcamera logged "try another cable and/or sensor").
+`tools/camerawatch.py` bounds every camera wait (`CAPTURE_TIMEOUT`, 10 s) and probes
 the camera every `CAMERA_PROBE_INTERVAL` (15 s) seconds between captures. A camera that
 does not answer ends the process with exit code 3, and `Restart=on-failure` brings it
 straight back: a stall costs at most a frame. `journalctl -u picamera | grep "Camera

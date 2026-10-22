@@ -10,7 +10,6 @@ import io
 import json
 import logging
 import os
-import socketserver
 import ssl
 import subprocess
 import time
@@ -19,6 +18,7 @@ from http import server
 from threading import Condition, Lock, Timer
 from tools.getenv import get_env_var
 from tools.camerawatch import CameraWatch
+from tools.tlsserver import ThreadedTLSServer
 
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder, MJPEGEncoder
@@ -77,6 +77,11 @@ STATS_FILE = get_env_var("STATS_FILE", os.path.join(os.environ.get("STATE_DIRECT
 # probe checks the camera every CAMERA_PROBE_INTERVAL seconds between captures.
 CAPTURE_TIMEOUT = float(get_env_var("CAPTURE_TIMEOUT", "10"))
 CAMERA_PROBE_INTERVAL = float(get_env_var("CAMERA_PROBE_INTERVAL", "15"))
+# Seconds a client gets to complete its TLS handshake, and then for each read or write
+# (tools/tlsserver.py). Handshakes happen in each connection's own thread, so a client
+# that connects and says nothing waits out its own limit and holds up nobody else.
+TLS_HANDSHAKE_TIMEOUT = float(get_env_var("TLS_HANDSHAKE_TIMEOUT", "10"))
+REQUEST_TIMEOUT = float(get_env_var("REQUEST_TIMEOUT", "30"))
 SENSOR_TEMP_FILE = os.path.join(os.environ["STATE_DIRECTORY"], "sensor-temp") if os.environ.get("STATE_DIRECTORY") else None
 
 encoder_lock = Lock()
@@ -449,9 +454,9 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.end_headers()
 
 
-class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+class StreamingServer(ThreadedTLSServer):
+    handshake_timeout = TLS_HANDSHAKE_TIMEOUT
+    request_timeout = REQUEST_TIMEOUT
 
 
 if hdr_enabled:
@@ -491,7 +496,10 @@ try:
     if (get_env_var("KEYFILE", False)):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certfile=get_env_var("CERTFILE"), keyfile=get_env_var("KEYFILE"))
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        # Not server.socket = context.wrap_socket(...): that does every handshake in the
+        # one accepting thread, and one silent client froze the whole server
+        # (tools/tlsserver.py).
+        server.ssl_context = context
     print(f"Starting picamera streamer on port {port}")
     server.serve_forever()
 finally:
